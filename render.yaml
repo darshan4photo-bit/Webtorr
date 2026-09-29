@@ -1,0 +1,20 @@
+# Render Blueprint — deploy with: Dashboard → New → Blueprint → pick this repo
+services:
+  - type: web
+    name: streamtor
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: ACCESS_CODE        # you'll be asked for this on first deploy — pick a strong code
+        sync: false
+      - key: MAX_TORRENTS
+        value: 2
+      - key: MAX_SIZE_GB
+        value: 10
+      - key: IDLE_MINUTES
+        value: 20

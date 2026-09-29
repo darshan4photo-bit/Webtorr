@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Streamtor — Stream torrents right in your browser</title>
+<meta name="description" content="Paste a magnet link or drop a .torrent file and stream video, audio and images instantly in your browser. No install, no sign-up.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg-glow"></div>
+
+<header class="nav">
+  <a class="brand" href="./"><img src="favicon.svg" alt="" width="30" height="30"><span>Stream<b>tor</b></span></a>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#faq">FAQ</a>
+    <span class="pill" id="peerPill" title="Active torrents in this tab">● idle</span>
+  </nav>
+</header>
+
+<main>
+  <!-- HERO / INPUT -->
+  <section class="hero" id="hero">
+    <h1>Stream torrents <span class="grad">instantly</span><br>right in your browser</h1>
+    <p class="sub">Paste a magnet link, info-hash or .torrent URL — or drop a .torrent file. Watch videos and listen to music while it downloads. No install. No sign-up.</p>
+
+    <form id="loginForm" class="addbox login" hidden autocomplete="off">
+      <span>🔑</span>
+      <input id="codeInput" type="password" placeholder="Enter access code to use the server engine">
+      <button type="submit" class="btn primary">Unlock</button>
+    </form>
+
+    <div id="engineBox" class="engine" hidden>
+      <span class="eyebrow">Engine</span>
+      <div class="seg">
+        <button type="button" data-engine="server" class="on" title="Server downloads the torrent and streams it to you. Works with regular torrents.">🖥️ Server (any torrent)</button>
+        <button type="button" data-engine="browser" title="Runs in your browser over WebRTC. Only works with WebTorrent peers.">🌐 Browser P2P</button>
+      </div>
+    </div>
+
+    <form id="addForm" class="addbox" autocomplete="off">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>
+      <input id="magnetInput" type="text" spellcheck="false" placeholder="magnet:?xt=urn:btih:…  or  info-hash  or  https://…/file.torrent">
+      <button type="submit" class="btn primary">Stream</button>
+    </form>
+
+    <div id="drop" class="drop" tabindex="0">
+      <input type="file" id="fileInput" accept=".torrent" hidden>
+      <span>📁 Drop a <b>.torrent</b> file here, or <u>browse</u></span>
+    </div>
+
+    <div class="samples">
+      <span>Try a legal sample:</span>
+      <button class="chip" data-sample="sintel">Sintel</button>
+      <button class="chip" data-sample="tos">Tears of Steel</button>
+      <button class="chip" data-sample="cosmos">Cosmos Laundromat</button>
+    </div>
+    <p id="error" class="error" hidden></p>
+    <p id="notice" class="error notice" hidden></p>
+  </section>
+
+  <!-- TORRENT VIEW -->
+  <section id="view" class="view" hidden>
+    <div class="view-head">
+      <div>
+        <div class="eyebrow">Torrent</div>
+        <h2 id="tName">Fetching metadata…</h2>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="copyLink">🔗 Copy share link</button>
+        <button class="btn danger" id="stopBtn">✕ Stop &amp; close</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><label>Status</label><b id="sStatus">Connecting…</b></div>
+      <div class="stat"><label>Progress</label><b id="sProg">0%</b></div>
+      <div class="stat"><label>Download</label><b id="sDown">0 B/s</b></div>
+      <div class="stat"><label>Upload</label><b id="sUp">0 B/s</b></div>
+      <div class="stat"><label>Peers</label><b id="sPeers">0</b></div>
+      <div class="stat"><label>Size</label><b id="sSize">—</b></div>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+
+    <div class="grid">
+      <div class="player-col">
+        <div class="player" id="player">
+          <div class="placeholder" id="placeholder">
+            <div class="big">▶</div>
+            <p>Select a file from the list to start streaming</p>
+          </div>
+          <div id="mediaHost"></div>
+        </div>
+        <div class="now" id="nowPlaying" hidden>
+          <div><span class="eyebrow">Now playing</span><div id="nowName"></div></div>
+          <div class="now-actions">
+            <button class="btn ghost small" id="compatBtn" type="button" hidden title="Converts the video on the server so more formats play (no seeking while converting)">🛠 Compatibility mode</button>
+            <a class="btn ghost small" id="dlNow" href="#" download>⬇ Download</a>
+          </div>
+        </div>
+      </div>
+
+      <aside class="files-col">
+        <div class="files-head"><h3>Files <small id="fCount"></small></h3></div>
+        <ul id="files" class="files"></ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- HOW -->
+  <section class="features" id="how">
+    <h2>How it works</h2>
+    <div class="cards">
+      <div class="card"><div class="ico">🧲</div><h3>1. Add a torrent</h3><p>Paste a magnet link or drop a .torrent file. The browser fetches metadata from peers.</p></div>
+      <div class="card"><div class="ico">⚡</div><h3>2. Stream as it downloads</h3><p>Pieces are requested in playback order through a Service Worker, so video starts within seconds.</p></div>
+      <div class="card"><div class="ico">🔒</div><h3>3. Stays in your tab</h3><p>Everything runs client-side over WebRTC. Nothing is uploaded to our server and nothing is stored on disk.</p></div>
+    </div>
+  </section>
+
+  <section class="faq" id="faq">
+    <h2>FAQ</h2>
+    <details><summary>Why is my torrent stuck on “Connecting…”?</summary><p>Browsers can only talk to peers that support <b>WebRTC</b> (WebTorrent peers). Classic-only torrents (plain BitTorrent clients over TCP/UDP) usually have no browser-reachable peers. Torrents that are also seeded by WebTorrent clients — like the samples above — work great. For best results, use a torrent with a <code>wss://</code> tracker.</p></details>
+    <details><summary>Which formats can I play?</summary><p>Whatever your browser supports natively: MP4 (H.264/AAC), WebM, MP3, AAC, OGG, FLAC, WAV, images, and text subtitles (.srt / .vtt are auto-detected). MKV and HEVC depend on your browser.</p></details>
+    <details><summary>Is it legal?</summary><p>This tool is just a client, like any torrent app. Only stream content you have the right to access — public-domain, Creative Commons, or your own files.</p></details>
+    <details><summary>Do you store my files?</summary><p>No. Data lives in your browser's memory while the tab is open, and is discarded when you close it.</p></details>
+  </section>
+</main>
+
+<footer>Built with <a href="https://webtorrent.io" target="_blank" rel="noopener">WebTorrent</a> · Inspired by webtor.io · Only stream content you have the right to use.</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
