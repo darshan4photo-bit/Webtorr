@@ -14,7 +14,9 @@ let ffmpegPath = null;
 try { ffmpegPath = (await import('ffmpeg-static')).default; } catch { /* optional */ }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC = path.join(__dirname, 'public');
+// Serve ./public if it exists, otherwise the site files in the project root (this repo's layout).
+const PUBLIC = fs.existsSync(path.join(__dirname, 'public')) ? path.join(__dirname, 'public') : __dirname;
+const PRIVATE_FILES = new Set(['server.js', 'package.json', 'package-lock.json', 'render.yaml', 'readme.md']);
 const env = process.env;
 const CFG = {
   port: Number(env.PORT) || 3000,
@@ -234,7 +236,12 @@ function serveStatic(req, res, url) {
   let p = decodeURIComponent(url.pathname);
   if (p === '/') p = '/index.html';
   const file = path.normalize(path.join(PUBLIC, p));
-  if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end('Forbidden'); }
+  const rel = path.relative(PUBLIC, file);
+  const base = path.basename(file).toLowerCase();
+  if (rel.startsWith('..') || rel.startsWith('.') || rel.startsWith('node_modules') || PRIVATE_FILES.has(base)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    return res.end('Not found');
+  }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
