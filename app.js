@@ -191,6 +191,21 @@ function renderFiles(info) {
     li.onclick = () => play(f, li, subs);
     f._li = li; list.appendChild(li);
   }
+  // "More in this torrent" poster rail
+  const media = order.filter((o) => o.k === 'video' || o.k === 'audio');
+  const rail = $('posters');
+  rail.innerHTML = '';
+  for (const { f, k } of media) {
+    const card = document.createElement('div');
+    card.className = 'poster' + (k === 'audio' ? ' s2' : '');
+    card.innerHTML = `<div class="thumb">${ICON[k]}<span class="play">▶</span><div class="fprog"><i></i></div></div>
+      <div class="ptitle"></div><div class="pmeta"><span>${bytes(f.length)}</span><span class="pc">0%</span></div>`;
+    card.querySelector('.ptitle').textContent = f.path.split(/[/\\]/).pop() || f.name;
+    card.title = f.name;
+    card.onclick = () => play(f, f._li, subs);
+    f._card = card; rail.appendChild(card);
+  }
+  $('posterRow').hidden = media.length < 2;
   const playable = order.filter((o) => o.k === 'video' || o.k === 'audio');
   if (playable.length) {
     const first = playable[0].k;
@@ -232,6 +247,8 @@ async function play(file, li, subs, forceConvert = false) {
   ['playing', 'load', 'canplay'].forEach((ev) => el.addEventListener(ev, clear));
 
   const native = kind === 'video' ? NATIVE_VIDEO.includes(ext(file.name)) : NATIVE_AUDIO.includes(ext(file.name));
+  document.querySelectorAll('.poster.active').forEach((x) => x.classList.remove('active'));
+  if (file._card) file._card.classList.add('active');
   let useRemux = convertable && (forceConvert || !native);
   remuxActive = useRemux;
   compat.textContent = useRemux ? '🛠 Compatibility mode: ON' : '🛠 Compatibility mode';
@@ -288,6 +305,10 @@ function paintStats({ progress, down, up, peers, meta }) {
     const pr = f.progress || 0;
     f._li.querySelector('.fp i').style.width = pr * 100 + '%';
     f._li.querySelector('.pc').textContent = (pr * 100).toFixed(0) + '%';
+    if (f._card) {
+      f._card.querySelector('.fprog i').style.width = pr * 100 + '%';
+      f._card.querySelector('.pmeta .pc').textContent = (pr * 100).toFixed(0) + '%';
+    }
   }
 }
 
@@ -298,6 +319,7 @@ async function resetView() {
   if (old?.kind === 'server') fetch('api/torrent/' + old.hash, { method: 'DELETE' }).catch(() => {});
   objectUrls.forEach(URL.revokeObjectURL); objectUrls = [];
   $('mediaHost').innerHTML = ''; $('nowPlaying').hidden = true; $('placeholder').hidden = false;
+  $('posters').innerHTML = ''; $('posterRow').hidden = true;
   $('placeholder').querySelector('p').textContent = 'Select a file from the list to start streaming';
   ['sProg', 'sDown', 'sUp', 'sPeers', 'sSize'].forEach((i) => ($(i).textContent = i === 'sSize' ? '—' : i === 'sProg' ? '0%' : i === 'sPeers' ? '0' : '0 B/s'));
   $('bar').style.width = '0';
@@ -306,7 +328,27 @@ async function resetView() {
 
 /* ---------- UI wiring ---------- */
 $('addForm').addEventListener('submit', (e) => { e.preventDefault(); start($('magnetInput').value); });
-document.querySelectorAll('[data-sample]').forEach((b) => b.addEventListener('click', () => { $('magnetInput').value = SAMPLES[b.dataset.sample]; start(SAMPLES[b.dataset.sample], b.textContent); }));
+const SAMPLE_META = {
+  sintel: { title: 'Sintel', sub: 'Open Movie · 2010', cls: '' },
+  tos: { title: 'Tears of Steel', sub: 'Open Movie · 2012', cls: 's2' },
+  cosmos: { title: 'Cosmos Laundromat', sub: 'Open Movie · 2015', cls: 's3' }
+};
+$('samples').innerHTML = Object.entries(SAMPLE_META).map(([k, m]) =>
+  `<div class="poster ${m.cls}" data-sample="${k}" role="button" tabindex="0" title="${m.title}">
+     <div class="thumb">🎬<span class="play">▶</span></div>
+     <div class="ptitle">${m.title}</div>
+     <div class="pmeta">${m.sub}</div>
+   </div>`).join('');
+document.querySelectorAll('[data-sample]').forEach((card) => {
+  const go = () => { const k = card.dataset.sample; $('magnetInput').value = SAMPLES[k]; start(SAMPLES[k], SAMPLE_META[k].title); };
+  card.addEventListener('click', go);
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+});
+$('navSearch').addEventListener('click', () => {
+  if (!$('view').hidden) backHome();
+  $('hero').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('magnetInput').focus();
+});
 const drop = $('drop');
 drop.addEventListener('click', () => $('fileInput').click());
 drop.addEventListener('keydown', (e) => e.key === 'Enter' && $('fileInput').click());
