@@ -7,7 +7,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebTorrent from 'webtorrent';
 
 let ffmpegPath = null;
@@ -28,7 +28,8 @@ const CFG = {
   maxSize: (Number(env.MAX_SIZE_GB) || 15) * 1024 ** 3,
   idleMs: (Number(env.IDLE_MINUTES) || 20) * 60_000,
   metaTimeout: (Number(env.METADATA_TIMEOUT_SEC) || 75) * 1000,
-  uploadLimit: (Number(env.UPLOAD_LIMIT_KBPS) || 100) * 1024
+  uploadLimit: (Number(env.UPLOAD_LIMIT_KBPS) || 100) * 1024,
+  transcodeHeight: Number(env.TRANSCODE_MAX_HEIGHT) || 1080
 };
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -52,6 +53,7 @@ const find = async (hash) => (client ? await client.get(hash) : null);
 
 function removeTorrent(t) {
   touched.delete(t.infoHash);
+  for (const k of probed.keys()) if (k.startsWith(t.infoHash)) probed.delete(k);
   return new Promise((r) => t.destroy({ destroyStore: true }, () => r()));
 }
 setInterval(() => {
@@ -126,10 +128,68 @@ const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';'
 const authed = (req) => !CFG.accessCode || cookies(req).st_auth === token();
 const attempts = new Map();
 
+/* ---------------- format conversion ---------------- */
+// One probe per file (cached): which codecs/dimensions does it actually contain?
+const probed = new Map(); // `${hash}:${idx}` -> {vcodec, vIndex, vHeight, acodec} | null
+
+function probeCodecs(input, { timeoutMs = 20_000 } = {}) {
+  return new Promise((resolve) => {
+    const ff = spawn(ffmpegPath, ['-hide_banner', '-i', input, '-t', '0.5', '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    ff.stderr.on('data', (d) => { err += d; if (err.length > 200_000) ff.kill('SIGKILL'); });
+    const timer = setTimeout(() => { try { ff.kill('SIGKILL'); } catch {} resolve(null); }, timeoutMs);
+    ff.on('close', () => {
+      clearTimeout(timer);
+      // Keep only the input-analysis section (drop the "Stream mapping:" / "Output #0" chatter).
+      const cut = err.search(/\nStream mapping:|\nOutput #0:/);
+      const head = cut >= 0 ? err.slice(0, cut) : err;
+      const lines = head.split('\n').filter((l) => /Stream #\d+:\d+/.test(l));
+      const videos = lines.filter((l) => /: Video: /.test(l));
+      const audios = lines.filter((l) => /: Audio: /.test(l));
+      if (!videos.length && !audios.length) return resolve(null);
+      const codecOf = (l) => /: (?:Video|Audio): ([^ ,(),:]+)/.exec(l)?.[1] || null;
+      // Still-image streams are cover art, not real video (mp3/flac/m4a/mkv audio files embed them).
+      const still = ['png', 'webp', 'bmp', 'gif', 'jpg', 'jpeg', 'mjpeg'];
+      const real = videos.filter((l) => !/attached pic/.test(l) && !still.includes(codecOf(l)));
+      const main = real[0] || null;
+      const dim = main ? /(\d{2,5})x(\d{2,5})/.exec(main) : null;
+      resolve({
+        vcodec: main ? codecOf(main) : null,
+        vIndex: main ? videos.indexOf(main) : 0,
+        vHeight: dim ? Number(dim[2]) : 0,
+        acodec: audios.length ? codecOf(audios[0]) : null
+      });
+    });
+  });
+}
+
+// Build ffmpeg args that turn any input into browser-playable fragmented MP4.
+// Video is stream-copied when browsers can decode it (h264/vp8/vp9/av1); otherwise it is
+// transcoded to H.264 (capped at maxH pixels tall, even dimensions). Audio always becomes AAC stereo.
+function buildConvertArgs(p, maxH) {
+  const args = ['-sn'];
+  if (p.vcodec) args.push('-map', p.vIndex > 0 ? `0:v:${p.vIndex}` : '0:v:0');
+  args.push('-map', '0:a:0?');
+  if (p.vcodec) {
+    const copyable = ['h264', 'vp8', 'vp9', 'av1'].includes(p.vcodec);
+    const tooTall = p.vHeight > maxH;
+    if (copyable && !tooTall) args.push('-c:v', 'copy');
+    else {
+      args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p');
+      const target = Math.min(p.vHeight || maxH, maxH);
+      if (tooTall) args.push('-vf', `scale=-2:${target - (target % 2)}`);
+      else if (p.vHeight) args.push('-vf', 'crop=trunc(iw/2)*2:trunc(ih/2)*2');
+    }
+  }
+  args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+    '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1');
+  return args;
+}
+
 /* ---------------- streaming ---------------- */
-function streamFile(req, res, file, url, hash, idx) {
+async function streamFile(req, res, file, url, hash, idx) {
   const ext = path.extname(file.name).toLowerCase();
-  const remux = url.searchParams.get('remux') === '1';
+  const remux = url.searchParams.get('remux') === '1' || url.searchParams.get('convert') === '1';
   const download = url.searchParams.get('download') === '1';
   const base = { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' };
 
@@ -137,12 +197,20 @@ function streamFile(req, res, file, url, hash, idx) {
 
   if (remux && !download) {
     if (!ffmpegPath) return json(res, 501, { error: 'ffmpeg is not available on this server.' });
-    // ffmpeg reads the file through our own range endpoint (so it can seek, e.g. MP4 with moov at the end),
-    // copies the video, converts audio to AAC stereo, and emits fragmented MP4 that browsers play progressively.
+    // ffmpeg reads the file through our own range endpoint (so it can seek, e.g. MP4 with moov at the end)
+    // and emits fragmented MP4 that browsers play progressively. Files the browser can't decode natively
+    // (HEVC/MKV, MPEG-4/DivX, WMV, FLV, AC3/DTS audio…) are converted on the fly; the rest are stream-copied.
+    const key = `${hash}:${idx}`;
+    if (!probed.has(key)) {
+      probed.set(key, await probeCodecs(`http://127.0.0.1:${CFG.port}/stream/${hash}/${idx}?ik=${INTERNAL_KEY}`));
+    }
+    const p = probed.get(key);
     const input = `http://127.0.0.1:${CFG.port}/stream/${hash}/${idx}?ik=${INTERNAL_KEY}`;
+    const transcode = !!p?.vcodec && !['h264', 'vp8', 'vp9', 'av1'].includes(p.vcodec);
+    console.log(`[convert] ${file.name}: ${p ? `${p.vcodec || 'no video'}${p.acodec ? '+' + p.acodec : ''}` : 'probe failed'} → ${transcode ? 'H.264 transcode' : 'stream copy'}`);
     const ff = spawn(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-readrate', '3', '-i', input,
-      '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
-      '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      ...buildConvertArgs(p || { vcodec: null, vIndex: 0, vHeight: 0, acodec: null }, CFG.transcodeHeight)],
+      { stdio: ['ignore', 'pipe', 'pipe'] });
     res.writeHead(200, { ...base, 'Content-Type': 'video/mp4' });
     ff.stderr.on('data', (d) => console.error('[ffmpeg]', d.toString().trim().slice(0, 300)));
     ff.stdout.pipe(res);
@@ -229,7 +297,7 @@ async function handleStream(req, res, url) {
   const file = t?.files?.[Number(m[2])];
   if (!file) return json(res, 404, { error: 'Torrent or file not found (it may have expired).' });
   touch(t); file.select();
-  streamFile(req, res, file, url, t.infoHash, Number(m[2]));
+  await streamFile(req, res, file, url, t.infoHash, Number(m[2]));
 }
 
 function serveStatic(req, res, url) {
@@ -249,17 +317,22 @@ function serveStatic(req, res, url) {
   });
 }
 
-http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
-  try {
-    if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
-    if (url.pathname.startsWith('/stream/')) return await handleStream(req, res, url);
-    serveStatic(req, res, url);
-  } catch (e) {
-    if (!res.headersSent) json(res, e.status || 500, { error: e.message || 'Server error' });
-    else res.end();
-  }
-}).listen(CFG.port, '0.0.0.0', () => console.log(`Streamtor on :${CFG.port} | engine=${CFG.engine} | ffmpeg=${!!ffmpegPath} | access code ${CFG.accessCode ? 'ON' : 'OFF'}`));
+// Only bind the HTTP port when run directly (`node server.js`), so tests can import the helpers.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    try {
+      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+      if (url.pathname.startsWith('/stream/')) return await handleStream(req, res, url);
+      serveStatic(req, res, url);
+    } catch (e) {
+      if (!res.headersSent) json(res, e.status || 500, { error: e.message || 'Server error' });
+      else res.end();
+    }
+  }).listen(CFG.port, '0.0.0.0', () => console.log(`Streamtor on :${CFG.port} | engine=${CFG.engine} | ffmpeg=${!!ffmpegPath} | access code ${CFG.accessCode ? 'ON' : 'OFF'}`));
+}
 
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e?.message || e));
 process.on('uncaughtException', (e) => console.error('[uncaughtException]', e?.message || e));
+
+export { probeCodecs, buildConvertArgs };
