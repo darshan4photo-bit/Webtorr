@@ -3,6 +3,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
 import { probeCodecs, buildConvertArgs } from '../server.js';
 
 const ff = (await import('ffmpeg-static')).default;
@@ -59,6 +60,46 @@ for (const [name, probe, src] of [['out-native.mp4', pNative, 'native.mp4'], ['o
   const head = size > 16 ? fs.readFileSync(path.join(dir, r.out)).subarray(4, 8).toString() : '';
   check(`convert: ${name} produced fragmented MP4`, r.code === 0 && size > 1000 && head === 'ftyp', `exit=${r.code} size=${size} ${r.err.slice(0, 200)}`);
 }
+
+// ---- over-the-network path: this is how the real stream endpoint feeds ffmpeg ----
+const serve = (file, { delayMs = 0 } = {}) => new Promise((resolve) => {
+  const body = fs.readFileSync(file);
+  const srv = http.createServer((req, res) => {
+    const send = () => {
+      const r = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+      if (r) {
+        const start = r[1] ? Number(r[1]) : 0;
+        const end = r[2] ? Math.min(Number(r[2]), body.length - 1) : body.length - 1;
+        res.writeHead(206, { 'Content-Type': 'video/x-matroska', 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${body.length}`, 'Content-Length': end - start + 1 });
+        res.end(body.subarray(start, end + 1));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'video/x-matroska', 'Accept-Ranges': 'bytes', 'Content-Length': body.length });
+        res.end(body);
+      }
+    };
+    if (delayMs) setTimeout(send, delayMs); else send();
+  });
+  srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${srv.address().port}/f`, close: () => srv.close() }));
+});
+
+const slow = await serve(path.join(dir, 'hevc.mkv'), { delayMs: 1500 });
+const pHttp = await probeCodecs(slow.url);
+check('probe over HTTP: hevc detected from a slow-starting source', pHttp?.vcodec === 'hevc', JSON.stringify(pHttp));
+const rHttp = await run(['-i', slow.url, ...buildConvertArgs(pHttp, 1080)], 'out-http.mp4');
+const httpSize = fs.existsSync(path.join(dir, 'out-http.mp4')) ? fs.statSync(path.join(dir, 'out-http.mp4')).size : 0;
+check('convert over HTTP: hevc → playable MP4', rHttp.code === 0 && httpSize > 1000 && fs.readFileSync(path.join(dir, 'out-http.mp4')).subarray(4, 8).toString() === 'ftyp', `exit=${rHttp.code} ${rHttp.err.slice(0, 200)}`);
+slow.close();
+
+const pDead = await probeCodecs('http://127.0.0.1:1/none.mkv', { timeoutMs: 4000 });
+check('probe: unreachable source resolves null (no hang)', pDead === null, String(pDead));
+
+// Regression: a failed/timed-out probe must NEVER drop the video track — that produced an
+// audio-only response that the <video> element silently refused to play.
+const guess = buildConvertArgs({ vcodec: null, vIndex: 0, vHeight: 0, acodec: null, guess: true }, 1080);
+check('args: probe failure still maps video (optional)', guess.includes('0:v:0?'), guess.join(' '));
+check('args: probe failure never stream-copies', !guess.includes('copy'), guess.join(' '));
+check('args: probe failure still encodes video to h264', guess.includes('libx264'), guess.join(' '));
+check('args: probe failure keeps audio → aac', guess.includes('aac'), guess.join(' '));
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll conversion checks passed');
