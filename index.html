@@ -12,19 +12,26 @@
 <div class="bg-glow"></div>
 
 <header class="nav">
-  <a class="brand" href="./"><img src="favicon.svg" alt="" width="30" height="30"><span>Stream<b>tor</b></span></a>
-  <nav>
+  <a class="brand" href="./"><img src="favicon.svg" alt="" width="32" height="32"><span>Stream<b>tor</b></span></a>
+  <nav class="navlinks">
+    <a href="#hero" class="on">Home</a>
     <a href="#how">How it works</a>
     <a href="#faq">FAQ</a>
-    <span class="pill" id="peerPill" title="Active torrents in this tab">● idle</span>
   </nav>
+  <div class="navright">
+    <button class="iconbtn" id="navSearch" type="button" title="Jump to search" aria-label="Search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    </button>
+    <span class="pill" id="peerPill" title="Active torrents in this tab">● idle</span>
+  </div>
 </header>
 
 <main>
-  <!-- HERO / INPUT -->
+  <!-- HERO / SEARCH -->
   <section class="hero" id="hero">
-    <h1>Stream torrents <span class="grad">instantly</span><br>right in your browser</h1>
-    <p class="sub">Paste a magnet link, info-hash or .torrent URL — or drop a .torrent file. Watch videos and listen to music while it downloads. No install. No sign-up.</p>
+    <span class="eyebrow">Streaming, unlocked</span>
+    <h1>Every show.<br><span class="grad">Every format.</span><br>Right in your browser.</h1>
+    <p class="sub">Paste a magnet link, info-hash or .torrent URL — or drop a file. MKV, HEVC, MP4, music and more, converted automatically if your browser can't play them.</p>
 
     <form id="loginForm" class="addbox login" hidden autocomplete="off">
       <span>🔑</span>
@@ -41,9 +48,9 @@
     </div>
 
     <form id="addForm" class="addbox" autocomplete="off">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>
-      <input id="magnetInput" type="text" spellcheck="false" placeholder="magnet:?xt=urn:btih:…  or  info-hash  or  https://…/file.torrent">
-      <button type="submit" class="btn primary">Stream</button>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="magnetInput" type="text" spellcheck="false" placeholder="Search magnet link, info-hash or https://…/file.torrent">
+      <button type="submit" class="btn primary">Play</button>
     </form>
 
     <div id="drop" class="drop" tabindex="0">
@@ -51,62 +58,63 @@
       <span>📁 Drop a <b>.torrent</b> file here, or <u>browse</u></span>
     </div>
 
-    <div class="samples">
-      <span>Try a legal sample:</span>
-      <button class="chip" data-sample="sintel">Sintel</button>
-      <button class="chip" data-sample="tos">Tears of Steel</button>
-      <button class="chip" data-sample="cosmos">Cosmos Laundromat</button>
-    </div>
     <p id="error" class="error" hidden></p>
     <p id="notice" class="error notice" hidden></p>
+
+    <div class="row">
+      <h2 class="rowTitle">Trending now</h2>
+      <div class="posters samples" id="samples"></div>
+    </div>
   </section>
 
-  <!-- TORRENT VIEW -->
+  <!-- WATCH VIEW -->
   <section id="view" class="view" hidden>
-    <div class="view-head">
-      <div>
-        <div class="eyebrow">Torrent</div>
-        <h2 id="tName">Fetching metadata…</h2>
-      </div>
-      <div class="actions">
-        <button class="btn ghost" id="copyLink">🔗 Copy share link</button>
-        <button class="btn danger" id="stopBtn">✕ Stop &amp; close</button>
-      </div>
-    </div>
-
-    <div class="stats">
-      <div class="stat"><label>Status</label><b id="sStatus">Connecting…</b></div>
-      <div class="stat"><label>Progress</label><b id="sProg">0%</b></div>
-      <div class="stat"><label>Download</label><b id="sDown">0 B/s</b></div>
-      <div class="stat"><label>Upload</label><b id="sUp">0 B/s</b></div>
-      <div class="stat"><label>Peers</label><b id="sPeers">0</b></div>
-      <div class="stat"><label>Size</label><b id="sSize">—</b></div>
-    </div>
-    <div class="bar"><i id="bar"></i></div>
-
-    <div class="grid">
-      <div class="player-col">
-        <div class="player" id="player">
-          <div class="placeholder" id="placeholder">
-            <div class="big">▶</div>
-            <p>Select a file from the list to start streaming</p>
-          </div>
-          <div id="mediaHost"></div>
+    <div class="watch">
+      <div class="player" id="player">
+        <div class="placeholder" id="placeholder">
+          <div class="big">▶</div>
+          <p>Select a file from the list to start streaming</p>
         </div>
-        <div class="now" id="nowPlaying" hidden>
-          <div><span class="eyebrow">Now playing</span><div id="nowName"></div></div>
-          <div class="now-actions">
-            <button class="btn ghost small" id="compatBtn" type="button" hidden title="Force on-the-fly conversion to H.264/AAC so almost anything plays (no seeking while converting)">🛠 Compatibility mode</button>
-            <a class="btn ghost small" id="dlNow" href="#" download>⬇ Download</a>
+        <div id="mediaHost"></div>
+      </div>
+      <div class="bar"><i id="bar"></i></div>
+
+      <div class="watch-meta">
+        <div class="watch-info">
+          <h2 id="tName">Fetching metadata…</h2>
+          <div class="chips">
+            <span class="chip live"><i class="dot"></i><b id="sStatus">Connecting…</b></span>
+            <span class="chip"><b id="sProg">0%</b> done</span>
+            <span class="chip"><b id="sSize">—</b></span>
+            <span class="chip">↓ <b id="sDown">0 B/s</b></span>
+            <span class="chip">↑ <b id="sUp">0 B/s</b></span>
+            <span class="chip"><b id="sPeers">0</b> peers</span>
           </div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="copyLink">🔗 Copy share link</button>
+          <button class="btn danger" id="stopBtn">✕ Stop &amp; close</button>
         </div>
       </div>
 
-      <aside class="files-col">
-        <div class="files-head"><h3>Files <small id="fCount"></small></h3></div>
-        <ul id="files" class="files"></ul>
-      </aside>
+      <div class="now" id="nowPlaying" hidden>
+        <div><span class="eyebrow">Now playing</span><div id="nowName"></div></div>
+        <div class="now-actions">
+          <button class="btn ghost small" id="compatBtn" type="button" hidden title="Force on-the-fly conversion to H.264/AAC so almost anything plays (no seeking while converting)">🛠 Compatibility mode</button>
+          <a class="btn ghost small" id="dlNow" href="#" download>⬇ Download</a>
+        </div>
+      </div>
     </div>
+
+    <div class="row" id="posterRow" hidden>
+      <h2 class="rowTitle">More in this torrent</h2>
+      <div class="posters" id="posters"></div>
+    </div>
+
+    <section class="episodes">
+      <h2 class="rowTitle">Episodes &amp; files <small id="fCount"></small></h2>
+      <ul id="files" class="files"></ul>
+    </section>
   </section>
 
   <!-- HOW -->
@@ -122,7 +130,8 @@
   <section class="faq" id="faq">
     <h2>FAQ</h2>
     <details><summary>Why is my torrent stuck on “Connecting…”?</summary><p>Browsers can only talk to peers that support <b>WebRTC</b> (WebTorrent peers). Classic-only torrents (plain BitTorrent clients over TCP/UDP) usually have no browser-reachable peers. Torrents that are also seeded by WebTorrent clients — like the samples above — work great. For best results, use a torrent with a <code>wss://</code> tracker.</p></details>
-    <details><summary>Which formats can I play?</summary><p>With the Server engine, essentially all of them: MP4, WebM, MKV, AVI, WMV, FLV, MOV, MPEG/TS — and audio like MP3, FLAC, OGG, WAV, AAC and Opus. If your browser can't decode a file natively (HEVC/H.265, DivX, AC3/DTS audio…), it is converted to H.264/AAC on the fly. Audio-only files with embedded cover art are handled too. The Browser P2P engine is limited to whatever your browser plays natively: MP4 (H.264/AAC), WebM, MP3, OGG, FLAC, WAV, images, and text subtitles (.srt / .vtt are auto-detected). MKV and HEVC depend on your browser.</p></details>
+    <details><summary>Which formats can I play?</summary><p>With the Server engine, essentially all of them: MP4, WebM, MKV, AVI, WMV, FLV, MOV, MPEG/TS — and audio like MP3, FLAC, OGG, WAV, AAC and Opus. If your browser can't decode a file natively (HEVC/H.265, DivX, AC3/DTS audio…) it is converted to H.264/AAC on the fly. Audio-only files with embedded cover art are handled too. The Browser P2P engine is limited to whatever your browser plays natively: MP4 (H.264/AAC), WebM, MP3, OGG, FLAC, WAV, images, and text subtitles (.srt / .vtt are auto-detected). MKV and HEVC depend on your browser.</p></details>
+    <details><summary>Can I seek while watching?</summary><p>Yes for files your browser plays natively — they're served with HTTP range requests. Converted streams can't seek while converting (inherent to progressive fragmented MP4).</p></details>
     <details><summary>Is it legal?</summary><p>This tool is just a client, like any torrent app. Only stream content you have the right to access — public-domain, Creative Commons, or your own files.</p></details>
     <details><summary>Do you store my files?</summary><p>No. Data lives in your browser's memory while the tab is open, and is discarded when you close it.</p></details>
   </section>
