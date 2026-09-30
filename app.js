@@ -16,6 +16,7 @@ const EXT = {
   sub: ['srt', 'vtt']
 };
 const NATIVE_VIDEO = ['mp4', 'm4v', 'webm', 'ogv'];
+const NATIVE_AUDIO = ['mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'wav'];
 const ext = (n) => (n.split('.').pop() || '').toLowerCase();
 const kindOf = (n) => Object.keys(EXT).find((k) => EXT[k].includes(ext(n))) || 'other';
 const ICON = { video: '🎬', audio: '🎵', image: '🖼️', sub: '💬', other: '📄' };
@@ -201,7 +202,7 @@ function renderFiles(info) {
 /* ---------- playback ---------- */
 const srt2vtt = (s) => 'WEBVTT\n\n' + s.replace(/\r+/g, '').replace(/(\d+:\d+:\d+),(\d+)/g, '$1.$2');
 
-async function play(file, li, subs, forceRemux = false) {
+async function play(file, li, subs, forceConvert = false) {
   const kind = kindOf(file.name);
   document.querySelectorAll('.file.active').forEach((x) => x.classList.remove('active'));
   li.classList.add('active');
@@ -210,8 +211,10 @@ async function play(file, li, subs, forceRemux = false) {
   objectUrls.forEach(URL.revokeObjectURL); objectUrls = [];
   $('placeholder').hidden = true; $('nowPlaying').hidden = false; $('nowName').textContent = file.name;
   $('dlNow').onclick = (e) => { e.preventDefault(); download(file); };
+  const isMedia = kind === 'video' || kind === 'audio';
+  const convertable = isMedia && cur.kind === 'server' && backend?.ffmpeg;
   const compat = $('compatBtn');
-  compat.hidden = !(cur.kind === 'server' && kind === 'video' && backend?.ffmpeg);
+  compat.hidden = !convertable;
   compat.onclick = () => play(file, li, subs, !remuxActive);
 
   if (kind === 'other' || kind === 'sub') {
@@ -228,19 +231,20 @@ async function play(file, li, subs, forceRemux = false) {
   const clear = () => loading.remove();
   ['playing', 'load', 'canplay'].forEach((ev) => el.addEventListener(ev, clear));
 
-  let useRemux = cur.kind === 'server' && kind === 'video' && backend?.ffmpeg && (forceRemux || !NATIVE_VIDEO.includes(ext(file.name)));
+  const native = kind === 'video' ? NATIVE_VIDEO.includes(ext(file.name)) : NATIVE_AUDIO.includes(ext(file.name));
+  let useRemux = convertable && (forceConvert || !native);
   remuxActive = useRemux;
   compat.textContent = useRemux ? '🛠 Compatibility mode: ON' : '🛠 Compatibility mode';
-  if (useRemux) loading.textContent = 'Preparing video for your browser…';
+  if (useRemux) loading.textContent = 'Converting on the server so your browser can play it…';
 
   el.addEventListener('error', () => {
-    if (cur?.kind === 'server' && kind === 'video' && backend?.ffmpeg && !remuxActive) { return play(file, li, subs, true); }
+    if (convertable && !remuxActive) { return play(file, li, subs, true); }
     loading.textContent = 'Your browser can’t play this format (' + ext(file.name).toUpperCase() + ')' + (cur?.kind === 'server' ? '' : '. Use the Server engine or Download and open in VLC.') + '.';
     loading.style.pointerEvents = 'auto';
     if (!loading.isConnected) host.append(loading);
   });
 
-  if (cur.kind === 'server') el.src = fileUrl(file, useRemux ? '?remux=1' : '');
+  if (cur.kind === 'server') el.src = fileUrl(file, useRemux ? '?convert=1' : '');
   else if (useSW) el.src = file.streamURL;
   else {
     const tick = setInterval(() => { loading.textContent = `Downloading ${(file.progress * 100).toFixed(0)}% — will play when complete…`; }, 500);

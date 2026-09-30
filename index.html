@@ -96,7 +96,7 @@
         <div class="now" id="nowPlaying" hidden>
           <div><span class="eyebrow">Now playing</span><div id="nowName"></div></div>
           <div class="now-actions">
-            <button class="btn ghost small" id="compatBtn" type="button" hidden title="Converts the video on the server so more formats play (no seeking while converting)">🛠 Compatibility mode</button>
+            <button class="btn ghost small" id="compatBtn" type="button" hidden title="Force on-the-fly conversion to H.264/AAC so almost anything plays (no seeking while converting)">🛠 Compatibility mode</button>
             <a class="btn ghost small" id="dlNow" href="#" download>⬇ Download</a>
           </div>
         </div>
@@ -122,7 +122,7 @@
   <section class="faq" id="faq">
     <h2>FAQ</h2>
     <details><summary>Why is my torrent stuck on “Connecting…”?</summary><p>Browsers can only talk to peers that support <b>WebRTC</b> (WebTorrent peers). Classic-only torrents (plain BitTorrent clients over TCP/UDP) usually have no browser-reachable peers. Torrents that are also seeded by WebTorrent clients — like the samples above — work great. For best results, use a torrent with a <code>wss://</code> tracker.</p></details>
-    <details><summary>Which formats can I play?</summary><p>Whatever your browser supports natively: MP4 (H.264/AAC), WebM, MP3, AAC, OGG, FLAC, WAV, images, and text subtitles (.srt / .vtt are auto-detected). MKV and HEVC depend on your browser.</p></details>
+    <details><summary>Which formats can I play?</summary><p>With the Server engine, essentially all of them: MP4, WebM, MKV, AVI, WMV, FLV, MOV, MPEG/TS — and audio like MP3, FLAC, OGG, WAV, AAC and Opus. If your browser can't decode a file natively (HEVC/H.265, DivX, AC3/DTS audio…), it is converted to H.264/AAC on the fly. Audio-only files with embedded cover art are handled too. The Browser P2P engine is limited to whatever your browser plays natively: MP4 (H.264/AAC), WebM, MP3, OGG, FLAC, WAV, images, and text subtitles (.srt / .vtt are auto-detected). MKV and HEVC depend on your browser.</p></details>
     <details><summary>Is it legal?</summary><p>This tool is just a client, like any torrent app. Only stream content you have the right to access — public-domain, Creative Commons, or your own files.</p></details>
     <details><summary>Do you store my files?</summary><p>No. Data lives in your browser's memory while the tab is open, and is discarded when you close it.</p></details>
   </section>
