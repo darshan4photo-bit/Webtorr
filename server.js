@@ -29,7 +29,8 @@ const CFG = {
   idleMs: (Number(env.IDLE_MINUTES) || 20) * 60_000,
   metaTimeout: (Number(env.METADATA_TIMEOUT_SEC) || 75) * 1000,
   uploadLimit: (Number(env.UPLOAD_LIMIT_KBPS) || 100) * 1024,
-  transcodeHeight: Number(env.TRANSCODE_MAX_HEIGHT) || 1080
+  transcodeHeight: Number(env.TRANSCODE_MAX_HEIGHT) || 1080,
+  probeMs: Number(env.PROBE_TIMEOUT_MS) || 10_000
 };
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -134,7 +135,9 @@ const probed = new Map(); // `${hash}:${idx}` -> {vcodec, vIndex, vHeight, acode
 
 function probeCodecs(input, { timeoutMs = 20_000 } = {}) {
   return new Promise((resolve) => {
-    const ff = spawn(ffmpegPath, ['-hide_banner', '-i', input, '-t', '0.5', '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    // Demux-only probe: read the container header and list the streams, without decoding anything.
+    const ff = spawn(ffmpegPath, ['-hide_banner', '-i', input, '-t', '0.5',
+      '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'copy', '-c:a', 'copy', '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     ff.stderr.on('data', (d) => { err += d; if (err.length > 200_000) ff.kill('SIGKILL'); });
     const timer = setTimeout(() => { try { ff.kill('SIGKILL'); } catch {} resolve(null); }, timeoutMs);
@@ -168,9 +171,17 @@ function probeCodecs(input, { timeoutMs = 20_000 } = {}) {
 // transcoded to H.264 (capped at maxH pixels tall, even dimensions). Audio always becomes AAC stereo.
 function buildConvertArgs(p, maxH) {
   const args = ['-sn'];
-  if (p.vcodec) args.push('-map', p.vIndex > 0 ? `0:v:${p.vIndex}` : '0:v:0');
-  args.push('-map', '0:a:0?');
-  if (p.vcodec) {
+  if (p.guess) {
+    // The probe didn't get the codecs (slow or unreachable pieces). Never drop the video track —
+    // map it optionally (so audio-only files still work) and transcode whatever ffmpeg finds.
+    args.push('-map', '0:v:0?', '-map', '0:a:0?',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
+      '-vf', 'crop=trunc(iw/2)*2:trunc(ih/2)*2');
+  } else {
+    if (p.vcodec) args.push('-map', p.vIndex > 0 ? `0:v:${p.vIndex}` : '0:v:0');
+    args.push('-map', '0:a:0?');
+  }
+  if (p.vcodec && !p.guess) {
     const copyable = ['h264', 'vp8', 'vp9', 'av1'].includes(p.vcodec);
     const tooTall = p.vHeight > maxH;
     if (copyable && !tooTall) args.push('-c:v', 'copy');
@@ -201,17 +212,22 @@ async function streamFile(req, res, file, url, hash, idx) {
     // and emits fragmented MP4 that browsers play progressively. Files the browser can't decode natively
     // (HEVC/MKV, MPEG-4/DivX, WMV, FLV, AC3/DTS audio…) are converted on the fly; the rest are stream-copied.
     const key = `${hash}:${idx}`;
-    if (!probed.has(key)) {
-      probed.set(key, await probeCodecs(`http://127.0.0.1:${CFG.port}/stream/${hash}/${idx}?ik=${INTERNAL_KEY}`));
-    }
-    const p = probed.get(key);
     const input = `http://127.0.0.1:${CFG.port}/stream/${hash}/${idx}?ik=${INTERNAL_KEY}`;
-    const transcode = !!p?.vcodec && !['h264', 'vp8', 'vp9', 'av1'].includes(p.vcodec);
-    console.log(`[convert] ${file.name}: ${p ? `${p.vcodec || 'no video'}${p.acodec ? '+' + p.acodec : ''}` : 'probe failed'} → ${transcode ? 'H.264 transcode' : 'stream copy'}`);
-    const ff = spawn(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-readrate', '3', '-i', input,
-      ...buildConvertArgs(p || { vcodec: null, vIndex: 0, vHeight: 0, acodec: null }, CFG.transcodeHeight)],
-      { stdio: ['ignore', 'pipe', 'pipe'] });
     res.writeHead(200, { ...base, 'Content-Type': 'video/mp4' });
+    res.flushHeaders(); // flush explicitly: writeHead alone waits for the first write, and the browser
+    // should show the player straight away instead of staring at a blank box while we probe.
+    let p = probed.get(key);
+    if (p === undefined) {
+      p = await probeCodecs(input, { timeoutMs: CFG.probeMs });
+      // Only cache successful probes: a slow first read must not poison every later retry.
+      if (p) probed.set(key, p);
+    }
+    const guess = !p;
+    const transcode = guess || !['h264', 'vp8', 'vp9', 'av1'].includes(p.vcodec);
+    console.log(`[convert] ${file.name}: ${guess ? 'probe timed out → safe transcode' : `${p.vcodec || 'no video'}${p.acodec ? '+' + p.acodec : ''}`} → ${transcode ? 'H.264 transcode' : 'stream copy'}`);
+    const ff = spawn(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-readrate', '3', '-i', input,
+      ...buildConvertArgs(p || { vcodec: null, vIndex: 0, vHeight: 0, acodec: null, guess: true }, CFG.transcodeHeight)],
+      { stdio: ['ignore', 'pipe', 'pipe'] });
     ff.stderr.on('data', (d) => console.error('[ffmpeg]', d.toString().trim().slice(0, 300)));
     ff.stdout.pipe(res);
     res.on('close', () => ff.kill('SIGKILL'));
