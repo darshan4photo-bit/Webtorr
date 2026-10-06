@@ -252,10 +252,19 @@ async function play(file, li, subs, forceConvert = false) {
   let useRemux = convertable && (forceConvert || !native);
   remuxActive = useRemux;
   compat.textContent = useRemux ? '🛠 Compatibility mode: ON' : '🛠 Compatibility mode';
-  if (useRemux) loading.textContent = 'Converting on the server so your browser can play it…';
+  if (useRemux) loading.textContent = 'Starting the stream on the server — a large file’s first seconds can take a moment…';
 
+  let retried = false;
   el.addEventListener('error', () => {
     if (convertable && !remuxActive) { return play(file, li, subs, true); }
+    // One automatic retry with a fresh ffmpeg process (e.g. if the server-side stream died).
+    if (cur?.kind === 'server' && !retried) {
+      retried = true;
+      loading.textContent = 'Reconnecting to the server…';
+      if (!loading.isConnected) host.append(loading);
+      el.src = fileUrl(file, (useRemux ? '?convert=1&' : '?') + 'r=' + Date.now());
+      return;
+    }
     loading.textContent = 'Your browser can’t play this format (' + ext(file.name).toUpperCase() + ')' + (cur?.kind === 'server' ? '' : '. Use the Server engine or Download and open in VLC.') + '.';
     loading.style.pointerEvents = 'auto';
     if (!loading.isConnected) host.append(loading);
