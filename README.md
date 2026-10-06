@@ -26,11 +26,12 @@ Manual alternative: New → Web Service → Build `npm install` → Start `node 
 |---|---|---|
 | `ACCESS_CODE` | *(none)* | Password required for the server engine. **Set it** on any public host. |
 | `MAX_TORRENTS` | 2 | Concurrent torrents (least-recently-used is evicted) |
-| `MAX_SIZE_GB` | 15 | Reject torrents bigger than this |
+| `MAX_SIZE_GB` | 250 | Reject torrents bigger than this (raised for large 4K remuxes) |
 | `IDLE_MINUTES` | 20 | Delete a torrent + its data after this long without the page polling it |
 | `METADATA_TIMEOUT_SEC` | 75 | Give up if no peers provide metadata |
 | `UPLOAD_LIMIT_KBPS` | 100 | Cap seeding bandwidth (keeps your Render egress low) |
-| `TRANSCODE_MAX_HEIGHT` | 1080 | Cap converted-video resolution (lower = less CPU on the fly) |
+| `TRANSCODE_MAX_HEIGHT` | 2160 | Cap converted-video resolution (4K sources stay 4K; lower = less CPU on the fly) |
+| `OPENSUBTITLES_API_KEY` | *(none)* | Enables `GET /api/subtitles` — moviehash/filename lookup on OpenSubtitles, converted to WebVTT |
 | `ENABLE_ENGINE` | true | `false` = static-only (no torrent engine) |
 
 ## Render free plan notes

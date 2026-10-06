@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import zlib from 'node:zlib';
 import WebTorrent from 'webtorrent';
 
 let ffmpegPath = null;
@@ -22,14 +23,15 @@ const CFG = {
   port: Number(env.PORT) || 3000,
   engine: env.ENABLE_ENGINE !== 'false',                 // set ENABLE_ENGINE=false for static-only
   accessCode: env.ACCESS_CODE || '',                     // strongly recommended on a public host
+  osKey: env.OPENSUBTITLES_API_KEY || '',                // enables GET /api/subtitles (OpenSubtitles)
   secret: env.SESSION_SECRET || env.ACCESS_CODE || crypto.randomBytes(16).toString('hex'),
   dir: env.DOWNLOAD_DIR || path.join(os.tmpdir(), 'streamtor'),
   maxTorrents: Number(env.MAX_TORRENTS) || 2,
-  maxSize: (Number(env.MAX_SIZE_GB) || 15) * 1024 ** 3,
+  maxSize: (Number(env.MAX_SIZE_GB) || 250) * 1024 ** 3, // large 4K torrents (raise via env if your disk allows)
   idleMs: (Number(env.IDLE_MINUTES) || 20) * 60_000,
   metaTimeout: (Number(env.METADATA_TIMEOUT_SEC) || 75) * 1000,
   uploadLimit: (Number(env.UPLOAD_LIMIT_KBPS) || 100) * 1024,
-  transcodeHeight: Number(env.TRANSCODE_MAX_HEIGHT) || 1080,
+  transcodeHeight: Number(env.TRANSCODE_MAX_HEIGHT) || 2160, // keep 4K sources at 4K (lower if the CPU can't keep up)
   probeMs: Number(env.PROBE_TIMEOUT_MS) || 10_000
 };
 
@@ -55,6 +57,8 @@ const find = async (hash) => (client ? await client.get(hash) : null);
 function removeTorrent(t) {
   touched.delete(t.infoHash);
   for (const k of probed.keys()) if (k.startsWith(t.infoHash)) probed.delete(k);
+  for (const k of subCache.keys()) if (k.startsWith(t.infoHash)) subCache.delete(k);
+  for (const k of moviehashCache.keys()) if (k.startsWith(t.infoHash)) moviehashCache.delete(k);
   return new Promise((r) => t.destroy({ destroyStore: true }, () => r()));
 }
 setInterval(() => {
@@ -197,6 +201,137 @@ function buildConvertArgs(p, maxH) {
   return args;
 }
 
+/* ---------------- subtitles (OpenSubtitles) ---------------- */
+// Moviehash per the official opensubtitlescli reference: seed with the file size, sum every
+// little-endian uint64 word in the first and last 64 KiB (mod 2^64), print as 16 hex chars.
+// Files below 128 KiB can't be hashed (the two chunks would overlap), so those fall back to a
+// filename search instead.
+const MH_CHUNK = 65536;
+const MH_MIN_SIZE = MH_CHUNK * 2; // 128 KiB
+const MH_TIMEOUT_MS = 15_000;
+const subCache = new Map();       // `${infoHash}:${idx}:${lang}` -> VTT text (bounded)
+const moviehashCache = new Map(); // `${infoHash}:${idx}` -> hex (successes only — a slow read must not poison retries)
+
+async function computeMoviehash(file, { chunk = MH_CHUNK, timeoutMs = MH_TIMEOUT_MS } = {}) {
+  const size = file.length || 0;
+  if (size < MH_MIN_SIZE) return null;
+  const read = (start, len) => new Promise((resolve) => {
+    const chunks = []; let n = 0; let rs;
+    const timer = setTimeout(() => { try { rs?.destroy(); } catch {} resolve(null); }, timeoutMs);
+    try { rs = file.createReadStream({ start, end: start + len - 1 }); } // end is inclusive (WebTorrent)
+    catch { clearTimeout(timer); return resolve(null); }
+    rs.on('data', (c) => {
+      chunks.push(c); n += c.length;
+      if (n >= len) { clearTimeout(timer); try { rs.destroy(); } catch {} resolve(Buffer.concat(chunks).subarray(0, len)); }
+    });
+    rs.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks)); });
+    rs.on('error', () => { clearTimeout(timer); resolve(null); });
+  });
+  const [head, tail] = await Promise.all([read(0, chunk), read(size - chunk, chunk)]);
+  if (!head || !tail || head.length < chunk || tail.length < chunk) return null;
+  let sum = BigInt(size);
+  for (const buf of [head, tail]) for (let i = 0; i + 8 <= buf.length; i += 8) sum += buf.readBigUInt64LE(i);
+  return (sum & 0xFFFFFFFFFFFFFFFFn).toString(16).padStart(16, '0');
+}
+
+const OS_BASE = 'https://api.opensubtitles.com/api/v1';
+const osHeaders = (post) => ({
+  'Accept': 'application/json',
+  'Api-Key': CFG.osKey,
+  'X-Api-Key': CFG.osKey,
+  'User-Agent': 'Streamtor/1.0',
+  ...(post ? { 'Content-Type': 'application/json' } : {})
+});
+
+async function osSearch({ moviehash, query, lang, fetchImpl }) {
+  const u = new URL(`${OS_BASE}/subtitles`);
+  if (moviehash) u.searchParams.set('moviehash', moviehash);
+  if (query) u.searchParams.set('query', query);
+  u.searchParams.set('languages', lang);
+  u.searchParams.set('order_by', 'download_count');
+  u.searchParams.set('order_direction', 'desc');
+  const r = await fetchImpl(u, { headers: osHeaders(), signal: AbortSignal.timeout(10_000) });
+  if (!r.ok) return null;
+  const j = await r.json().catch(() => null);
+  for (const item of j?.data || []) {
+    const f = item?.attributes?.files?.[0];
+    if (f?.file_id) return { fileId: f.file_id, name: f.file_name || null };
+  }
+  return null;
+}
+
+async function osDownload(fileId, fetchImpl) {
+  const r = await fetchImpl(`${OS_BASE}/download`, {
+    method: 'POST', headers: osHeaders(true), body: JSON.stringify({ file_id: fileId }), signal: AbortSignal.timeout(10_000)
+  });
+  if (!r.ok) return null;
+  const j = await r.json().catch(() => null);
+  if (!j?.link) return null;
+  const f = await fetchImpl(j.link, { signal: AbortSignal.timeout(15_000) });
+  if (!f.ok) return null;
+  return Buffer.from(await f.arrayBuffer());
+}
+
+const srtToVtt = (s) => 'WEBVTT\n\n' + s.replace(/\r+/g, '').replace(/(\d+:\d+:\d+),(\d+)/g, '$1.$2');
+
+async function subToVtt(buf, name = '') {
+  if (!buf?.length) return null;
+  if (buf[0] === 0x1f && buf[1] === 0x8b) { try { buf = zlib.gunzipSync(buf); } catch { return null; } }
+  const text = buf.toString('utf8').replace(/^\uFEFF/, '');
+  if (/^\s*WEBVTT/.test(text)) return text.replace(/\r\n?/g, '\n');
+  const ext = path.extname(name).toLowerCase();
+  const looksSrt = /\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->/.test(text);
+  if (ext === '.srt' || looksSrt) return srtToVtt(text);
+  if (!ffmpegPath) return null;
+  // ASS/SSA/anything else: let ffmpeg convert it to WebVTT.
+  const isAss = /^\s*\[Script Info\]/im.test(text) || ext === '.ass' || ext === '.ssa';
+  const tmpExt = isAss ? '.ass' : (/^\.[a-z0-9]{1,5}$/.test(ext) ? ext : '.sub');
+  const tmp = path.join(os.tmpdir(), `st-sub-${crypto.randomBytes(6).toString('hex')}${tmpExt}`);
+  try { fs.writeFileSync(tmp, buf); } catch { return null; }
+  try {
+    return await new Promise((resolve) => {
+      const ff = spawn(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-i', tmp, '-f', 'webvtt', 'pipe:1'],
+        { stdio: ['ignore', 'pipe', 'pipe'] });
+      const out = []; let err = '';
+      const timer = setTimeout(() => { try { ff.kill('SIGKILL'); } catch {} resolve(null); }, 10_000);
+      ff.stdout.on('data', (d) => out.push(d));
+      ff.stderr.on('data', (d) => { err += d; if (err.length > 50_000) ff.kill('SIGKILL'); });
+      ff.on('close', (code) => {
+        clearTimeout(timer);
+        const v = Buffer.concat(out).toString('utf8');
+        resolve(code === 0 && /WEBVTT/.test(v) ? v : null);
+      });
+      ff.on('error', () => { clearTimeout(timer); resolve(null); });
+    });
+  } finally { fs.rm(tmp, { force: true }, () => {}); }
+}
+
+// Search → download → convert → cache. `t` only provides the infoHash for cache keying; the
+// network is injectable so tests can stub OpenSubtitles without touching it.
+async function getSubtitleVtt(t, file, idx, lang, { fetchImpl = fetch } = {}) {
+  const infoHash = t.infoHash || String(t);
+  const key = `${infoHash}:${idx}:${lang}`;
+  const cached = subCache.get(key);
+  if (cached) return cached;
+  if (!CFG.osKey) return null;
+  const mhKey = `${infoHash}:${idx}`;
+  let mh = moviehashCache.get(mhKey);
+  if (!mh) {
+    mh = await computeMoviehash(file);
+    if (mh) moviehashCache.set(mhKey, mh); // successes only — a slow read must not poison retries
+  }
+  let hit = mh ? await osSearch({ moviehash: mh, lang, fetchImpl }) : null;
+  if (!hit) hit = await osSearch({ query: path.basename(file.name, path.extname(file.name)), lang, fetchImpl });
+  if (!hit) return null; // misses are not cached: the subtitle DB grows and searches are cheap
+  const raw = await osDownload(hit.fileId, fetchImpl);
+  if (!raw) return null;
+  const vtt = await subToVtt(raw, hit.name || file.name);
+  if (!vtt) return null;
+  if (subCache.size >= 200) subCache.delete(subCache.keys().next().value); // bounded, oldest-first
+  subCache.set(key, vtt);
+  return vtt;
+}
+
 /* ---------------- streaming ---------------- */
 async function streamFile(req, res, file, url, hash, idx) {
   const ext = path.extname(file.name).toLowerCase();
@@ -279,6 +414,25 @@ async function handleApi(req, res, url) {
   }
   if (!authed(req)) return json(res, 401, { error: 'Access code required.', auth: true });
 
+  if (p === '/api/subtitles' && req.method === 'GET') {
+    const hash = String(url.searchParams.get('hash') || '');
+    const idx = url.searchParams.get('idx');
+    const lang = String(url.searchParams.get('lang') || 'en').toLowerCase();
+    if (!/^[a-f0-9]{40}$/.test(hash)) throw httpErr(400, 'hash must be a 40-char info-hash');
+    if (!/^\d+$/.test(String(idx ?? ''))) throw httpErr(400, 'idx must be a file index');
+    if (!/^[a-z]{2,3}(-[a-z]{2,8})?$/.test(lang)) throw httpErr(400, 'lang must be a language code like "en" or "pt-br"');
+    if (!CFG.osKey) return json(res, 501, { error: 'OpenSubtitles is not configured. Set OPENSUBTITLES_API_KEY.' });
+    const t = await find(hash.toLowerCase());
+    if (!t) return json(res, 404, { error: 'Torrent not found (it may have expired).' });
+    const file = t.files?.[Number(idx)];
+    if (!file) return json(res, 404, { error: 'File not found.' });
+    touch(t);
+    const vtt = await getSubtitleVtt(t, file, Number(idx), lang);
+    if (!vtt) return json(res, 404, { error: `No subtitles found for language "${lang}".` });
+    res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+    return res.end(vtt);
+  }
+
   if (p === '/api/add' && req.method === 'POST') {
     const ctype = req.headers['content-type'] || '';
     let source;
@@ -351,4 +505,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e?.message || e));
 process.on('uncaughtException', (e) => console.error('[uncaughtException]', e?.message || e));
 
-export { probeCodecs, buildConvertArgs };
+export { probeCodecs, buildConvertArgs, computeMoviehash, subToVtt, getSubtitleVtt, CFG };

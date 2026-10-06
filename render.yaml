@@ -15,6 +15,6 @@ services:
       - key: MAX_TORRENTS
         value: 2
       - key: MAX_SIZE_GB
-        value: 10
+        value: 250
       - key: IDLE_MINUTES
         value: 20
