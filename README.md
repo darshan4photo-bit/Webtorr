@@ -31,6 +31,7 @@ Streamtor doubles as a **self-hosted Stremio addon** — no extra install, no pa
 - All routes send permissive CORS headers, as the Stremio protocol requires.
 - `<code>` is your `ACCESS_CODE` on protected servers (so only people who know it can install the addon); on open servers any label such as `public` works.
 - Install: on the site, open **Stremio Addon** in the sidebar, copy the manifest URL (or press **Install in Stremio**) and add it via **Stremio → Addons → Community Addons**. Streams then play straight from your server, including the ffmpeg-based conversion.
+- The website mirrors the same catalog: the home page shows a **Your library** row backed by `GET /api/library` (cookie-gated, same shape as the addon catalog) and `GET /api/poster/<hash>.svg` for artwork. Click a card to stream it here, or use the 🧩 badge for a `stremio:///detail/…` deep link that opens it inside Stremio.
 
 ## Run locally (Node 22+)
     npm install

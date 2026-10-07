@@ -117,6 +117,7 @@ function backHome(msg) {
   resetView(); setNav('home'); $('view').hidden = true; $('hero').hidden = false;
   if (msg) showError(msg);
   history.replaceState(null, '', location.pathname);
+  loadLibrary();
 }
 
 async function startServer(s) {
@@ -138,6 +139,7 @@ async function startServer(s) {
   history.replaceState(null, '', '#' + info.infoHash);
   renderFiles(info);
   ticker = setInterval(pollServer, 1000);
+  loadLibrary();
 }
 async function pollServer() {
   if (!cur || cur.kind !== 'server') return;
@@ -425,3 +427,50 @@ $('addonCopy').addEventListener('click', async (e) => {
   catch { prompt('Copy the manifest URL:', t); }
   setTimeout(() => (e.target.textContent = '⧉ Copy'), 1500);
 });
+
+/* ---------- server library on the website (mirrors the Stremio catalog) ---------- */
+async function loadLibrary() {
+  if (!backend?.server) { $('libraryRow').hidden = true; return; }
+  let list = null;
+  try {
+    const r = await fetch('api/library', { cache: 'no-store' });
+    if (r.status === 401) { $('libraryRow').hidden = true; return; }
+    if (r.ok) list = (await r.json()).torrents || [];
+  } catch { /* transient */ }
+  if (!list) return;
+  const grid = $('library');
+  if (!list.length) { $('libraryRow').hidden = true; return; }
+  $('libraryRow').hidden = false;
+  $('libCount').textContent = `(${list.length})`;
+  grid.innerHTML = '';
+  for (const t of list) {
+    const card = document.createElement('div');
+    card.className = 'poster lib' + (t.type === 'series' ? ' s2' : '');
+    card.tabIndex = 0;
+    card.innerHTML = `<div class="thumb"><span class="play">▶</span></div>
+      <div class="ptitle"></div><div class="pmeta"><span>${t.type === 'series' ? 'Series' : 'Movie'} · ${t.playable} playable</span><span class="pc">${Math.round((t.progress || 0) * 100)}%</span></div>`;
+    card.querySelector('.ptitle').textContent = t.name;
+    card.title = t.name;
+    const img = document.createElement('img');
+    img.src = t.poster; img.alt = '';
+    img.onerror = () => { img.remove(); card.querySelector('.thumb').insertAdjacentHTML('afterbegin', '🎬'); };
+    card.querySelector('.thumb').insertAdjacentElement('afterbegin', img);
+    card.onclick = () => openLibraryItem(t);
+    card.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLibraryItem(t); } };
+    const st = document.createElement('a');
+    st.className = 'stremiolink';
+    st.href = `stremio:///detail/${t.type}/${t.metaId}`;
+    st.title = 'Open in Stremio';
+    st.textContent = '🧩 Stremio';
+    st.onclick = (e) => e.stopPropagation();
+    card.querySelector('.thumb').appendChild(st);
+    grid.appendChild(card);
+  }
+}
+function openLibraryItem(t) {
+  // Server engine re-adds by bare info-hash (the server augments trackers); the browser
+  // engine needs tracker magnets, so append our wss trackers.
+  if (mode === 'server' && backend) return start(t.infoHash, t.name);
+  start(`magnet:?xt=urn:btih:${t.infoHash}` + tr, t.name);
+}
+ready.then(() => { loadLibrary(); setInterval(loadLibrary, 20000); });

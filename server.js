@@ -433,6 +433,27 @@ async function handleApi(req, res, url) {
     return res.end(vtt);
   }
 
+  // Library listing for the website: mirrors the Stremio addon catalog (cookie-gated like the rest of /api).
+  if (p === '/api/library' && req.method === 'GET') {
+    const list = (client?.torrents || []).map((t) => {
+      const playable = (t.files || []).filter((f) => STREMIO_VIDEO.has(extOf(f.name)) || STREMIO_AUDIO.has(extOf(f.name))).length;
+      const series = isSeriesTorrent(t);
+      return {
+        infoHash: t.infoHash, name: t.name || t.infoHash, ready: !!t.ready, length: t.length || 0,
+        progress: t.progress || 0, files: (t.files || []).length, playable, series,
+        type: series ? 'series' : 'movie', metaId: `${STREMIO_PREFIX}:${t.infoHash}`,
+        poster: `/api/poster/${t.infoHash}.svg`
+      };
+    });
+    return json(res, 200, { torrents: list });
+  }
+  let pm;
+  if (req.method === 'GET' && (pm = /^\/api\/poster\/([a-f0-9]{40})\.svg$/i.exec(p))) {
+    const t = await find(pm[1].toLowerCase());
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' });
+    return res.end(stremioPoster(t?.name, pm[1]));
+  }
+
   if (p === '/api/add' && req.method === 'POST') {
     const ctype = req.headers['content-type'] || '';
     let source;

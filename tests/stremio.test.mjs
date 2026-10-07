@@ -141,6 +141,8 @@ try {
   check('endpoint(dl): unknown torrent → 404 JSON', dl.status === 404);
   const bad = await fetch(`${B.base}/stremio/public/catalog/movie/library-not-a-route`);
   check('endpoint: unknown subroute → 404', bad.status === 404);
+  const libOpen = await (await fetch(`${B.base}/api/library`)).json();
+  check('endpoint(library): open server → { torrents: [] } without login', Array.isArray(libOpen.torrents) && libOpen.torrents.length === 0);
 } finally {
   B.child.kill('SIGKILL'); children.delete(B.child);
 }
@@ -167,6 +169,19 @@ try {
   check('endpoint: engine disabled → addon 404s cleanly', r.status === 404);
 } finally {
   S.child.kill('SIGKILL'); children.delete(S.child);
+}
+
+// Website mirror of the addon catalog: cookie-gated GET /api/library + GET /api/poster.
+const L = await startServer({ ACCESS_CODE: 'libsecret' });
+try {
+  check('endpoint(library): unauthenticated → 401 (cookie-gated like other /api)', (await fetch(`${L.base}/api/library`)).status === 401);
+  const lcookie = `st_auth=${crypto.createHmac('sha256', 'libsecret').update('streamtor-auth').digest('hex')}`;
+  const lib = await (await fetch(`${L.base}/api/library`, { headers: { cookie: lcookie } })).json();
+  check('endpoint(library): { torrents: [] } on a fresh server', Array.isArray(lib.torrents) && lib.torrents.length === 0, JSON.stringify(lib));
+  const post = await fetch(`${L.base}/api/poster/${'f'.repeat(40)}.svg`, { headers: { cookie: lcookie } });
+  check('endpoint(poster): cookie-gated generated svg (no addon code needed)', post.status === 200 && (post.headers.get('content-type') || '').includes('svg') && (await post.text()).startsWith('<svg'), `${post.status}`);
+} finally {
+  L.child.kill('SIGKILL'); children.delete(L.child);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nAll Stremio addon checks passed');
