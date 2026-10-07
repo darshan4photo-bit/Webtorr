@@ -3,35 +3,50 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Streamtor — Stream torrents right in your browser</title>
-<meta name="description" content="Paste a magnet link or drop a .torrent file and stream video, audio and images instantly in your browser. No install, no sign-up.">
+<title>Streamtor — Stream torrents in your browser &amp; in Stremio</title>
+<meta name="description" content="Paste a magnet link or drop a .torrent file and stream video, audio and images instantly in your browser. Ships with a built-in Stremio addon.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="bg-glow"></div>
 
-<header class="nav">
-  <a class="brand" href="./"><img src="favicon.svg" alt="" width="32" height="32"><span>Stream<b>tor</b></span></a>
-  <nav class="navlinks">
-    <a href="#hero" class="on">Home</a>
-    <a href="#how">How it works</a>
-    <a href="#faq">FAQ</a>
+<!-- Stremio-style sidebar -->
+<aside class="side">
+  <a class="brand" href="./"><img src="favicon.svg" alt="" width="34" height="34"><span>Stream<b>tor</b></span></a>
+  <nav class="sidenav" aria-label="Sections">
+    <button type="button" class="on" data-nav="home" title="Discover &amp; watch">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+      Home
+    </button>
+    <button type="button" data-nav="addons" title="Install the built-in Stremio addon">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3h4v3a2 2 0 1 0 4 0h3v4h-3a2 2 0 1 0 0 4h3v4h-4v3h-4v-3a2 2 0 1 0-4 0v3H6v-3H3v-4h3a2 2 0 1 0 0-4H3V6h4V3"/></svg>
+      Stremio Addon
+    </button>
+    <a class="sideplain" href="#how">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.7 2.2c-.8.5-1.2 1-1.2 1.8"/><circle cx="12" cy="17" r=".5"/></svg>
+      How it works
+    </a>
+    <a class="sideplain" href="#faq">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20"/></svg>
+      FAQ
+    </a>
   </nav>
-  <div class="navright">
+  <div class="sidefoot">
     <button class="iconbtn" id="navSearch" type="button" title="Jump to search" aria-label="Search">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
     </button>
     <span class="pill" id="peerPill" title="Active torrents in this tab">● idle</span>
   </div>
-</header>
+</aside>
 
+<div class="shell">
 <main>
-  <!-- HERO / SEARCH -->
+  <!-- DISCOVER / HERO -->
   <section class="hero" id="hero">
-    <span class="eyebrow">Streaming, unlocked</span>
-    <h1>Every show.<br><span class="grad">Every format.</span><br>Right in your browser.</h1>
-    <p class="sub">Paste a magnet link, info-hash or .torrent URL — or drop a file. MKV, HEVC, MP4, music and more, converted automatically if your browser can't play them.</p>
+    <span class="eyebrow">Torrent streaming · Stremio-ready</span>
+    <h1>Paste a magnet.<br><span class="grad">Stream anything.</span></h1>
+    <p class="sub">MKV, HEVC, MP4, music and more — your server fetches the torrent and converts on the fly. And Streamtor ships with a <b>built-in Stremio addon</b>: browse this server's library right inside Stremio.</p>
 
     <form id="loginForm" class="addbox login" hidden autocomplete="off">
       <span>🔑</span>
@@ -49,7 +64,7 @@
 
     <form id="addForm" class="addbox" autocomplete="off">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <input id="magnetInput" type="text" spellcheck="false" placeholder="Search magnet link, info-hash or https://…/file.torrent">
+      <input id="magnetInput" type="text" spellcheck="false" placeholder="Paste magnet link, info-hash or https://…/file.torrent">
       <button type="submit" class="btn primary">Play</button>
     </form>
 
@@ -61,6 +76,8 @@
     <p id="error" class="error" hidden></p>
     <p id="notice" class="error notice" hidden></p>
 
+    <button class="btn ghost addonstrip" data-nav="addons" type="button">🧩 Also available as a Stremio addon — set it up →</button>
+
     <div class="row">
       <h2 class="rowTitle">Trending now</h2>
       <div class="posters samples" id="samples"></div>
@@ -69,75 +86,114 @@
 
   <!-- WATCH VIEW -->
   <section id="view" class="view" hidden>
-    <div class="watch">
-      <div class="player" id="player">
-        <div class="placeholder" id="placeholder">
-          <div class="big">▶</div>
-          <p>Select a file from the list to start streaming</p>
+    <div class="watchgrid">
+      <div class="watchcol">
+        <div class="player" id="player">
+          <div class="placeholder" id="placeholder">
+            <div class="big">▶</div>
+            <p>Select a file from the list to start streaming</p>
+          </div>
+          <div id="mediaHost"></div>
         </div>
-        <div id="mediaHost"></div>
-      </div>
-      <div class="bar"><i id="bar"></i></div>
+        <div class="bar"><i id="bar"></i></div>
 
-      <div class="watch-meta">
-        <div class="watch-info">
-          <h2 id="tName">Fetching metadata…</h2>
-          <div class="chips">
-            <span class="chip live"><i class="dot"></i><b id="sStatus">Connecting…</b></span>
-            <span class="chip"><b id="sProg">0%</b> done</span>
-            <span class="chip"><b id="sSize">—</b></span>
-            <span class="chip">↓ <b id="sDown">0 B/s</b></span>
-            <span class="chip">↑ <b id="sUp">0 B/s</b></span>
-            <span class="chip"><b id="sPeers">0</b> peers</span>
+        <div class="watch-meta">
+          <div class="watch-info">
+            <h2 id="tName">Fetching metadata…</h2>
+            <div class="chips">
+              <span class="chip live"><i class="dot"></i><b id="sStatus">Connecting…</b></span>
+              <span class="chip"><b id="sProg">0%</b> done</span>
+              <span class="chip"><b id="sSize">—</b></span>
+              <span class="chip">↓ <b id="sDown">0 B/s</b></span>
+              <span class="chip">↑ <b id="sUp">0 B/s</b></span>
+              <span class="chip"><b id="sPeers">0</b> peers</span>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn ghost" id="copyLink">🔗 Copy share link</button>
+            <button class="btn danger" id="stopBtn">✕ Stop &amp; close</button>
           </div>
         </div>
-        <div class="actions">
-          <button class="btn ghost" id="copyLink">🔗 Copy share link</button>
-          <button class="btn danger" id="stopBtn">✕ Stop &amp; close</button>
+
+        <div class="now" id="nowPlaying" hidden>
+          <div><span class="eyebrow">Now playing</span><div id="nowName"></div></div>
+          <div class="now-actions">
+            <button class="btn ghost small" id="compatBtn" type="button" hidden title="Force on-the-fly conversion to H.264/AAC so almost anything plays (no seeking while converting)">🛠 Compatibility mode</button>
+            <a class="btn ghost small" id="dlNow" href="#" download>⬇ Download</a>
+          </div>
         </div>
       </div>
 
-      <div class="now" id="nowPlaying" hidden>
-        <div><span class="eyebrow">Now playing</span><div id="nowName"></div></div>
-        <div class="now-actions">
-          <button class="btn ghost small" id="compatBtn" type="button" hidden title="Force on-the-fly conversion to H.264/AAC so almost anything plays (no seeking while converting)">🛠 Compatibility mode</button>
-          <a class="btn ghost small" id="dlNow" href="#" download>⬇ Download</a>
-        </div>
-      </div>
+      <aside class="railcol">
+        <h2 class="rowTitle">Files <small id="fCount"></small></h2>
+        <ul id="files" class="files rail"></ul>
+      </aside>
     </div>
 
     <div class="row" id="posterRow" hidden>
       <h2 class="rowTitle">More in this torrent</h2>
       <div class="posters" id="posters"></div>
     </div>
+  </section>
 
-    <section class="episodes">
-      <h2 class="rowTitle">Episodes &amp; files <small id="fCount"></small></h2>
-      <ul id="files" class="files"></ul>
-    </section>
+  <!-- STREMIO ADDON -->
+  <section id="addonsView" class="addons" hidden>
+    <span class="eyebrow">Built-in addon</span>
+    <h2>Use Streamtor inside <span class="grad">Stremio</span></h2>
+    <p class="sub">Streamtor speaks the Stremio addon protocol. Install it once and this server's library shows up as a catalog inside Stremio — every file streams straight from your server, with on-the-fly conversion for MKV, HEVC and friends.</p>
+
+    <div class="addoncard" id="addonMain">
+      <div class="addonrow" id="addonCodeRow" hidden>
+        <label for="addonCode">Access code</label>
+        <input id="addonCode" type="password" placeholder="Your ACCESS_CODE" autocomplete="off" spellcheck="false">
+        <span class="hint-inline">protects your addon URL — same code as the site</span>
+      </div>
+      <div class="addonrow">
+        <label for="addonUrl">Manifest URL</label>
+        <code id="addonUrl" class="addonurl"></code>
+        <button class="btn ghost small" id="addonCopy" type="button">⧉ Copy</button>
+      </div>
+      <div class="addonbtns">
+        <a class="btn primary" id="addonInstall" href="#">Install in Stremio</a>
+        <span id="addonState" class="addonstate" role="status"></span>
+      </div>
+      <ol class="steps">
+        <li>Install <b>Stremio</b> on desktop or mobile from <a href="https://www.stremio.com" target="_blank" rel="noopener">stremio.com</a>.</li>
+        <li>Add the addon: <b>Addons → Community Addons → paste the manifest URL</b> — or press “Install in Stremio” above on the device that has Stremio installed.</li>
+        <li>Open <b>Discover</b> and pick the <b>Streamtor Library</b> board: every torrent added on this server shows up, ready to stream. Episode packs appear as series.</li>
+      </ol>
+      <p class="hint" id="addonHint">Streams are served by this server over HTTP — the same engine powers the web player, including compatibility mode and subtitles.</p>
+    </div>
+
+    <div class="addoncard warn" id="addonNeedsServer" hidden>
+      <p>The Stremio addon needs the Node server engine (<code>server.js</code>). On a static host only the in-browser WebTorrent engine runs, so there is no addon to install. Deploy Streamtor on Render/VPS to enable it.</p>
+    </div>
   </section>
 
   <!-- HOW -->
   <section class="features" id="how">
     <h2>How it works</h2>
     <div class="cards">
-      <div class="card"><div class="ico">🧲</div><h3>1. Add a torrent</h3><p>Paste a magnet link or drop a .torrent file. The browser fetches metadata from peers.</p></div>
-      <div class="card"><div class="ico">⚡</div><h3>2. Stream as it downloads</h3><p>Pieces are requested in playback order through a Service Worker, so video starts within seconds.</p></div>
-      <div class="card"><div class="ico">🔒</div><h3>3. Stays in your tab</h3><p>Everything runs client-side over WebRTC. Nothing is uploaded to our server and nothing is stored on disk.</p></div>
+      <div class="card"><div class="ico">🧲</div><h3>1. Add a torrent</h3><p>Paste a magnet link, info-hash or .torrent URL — or drop the file. The server fetches metadata from peers and lists everything inside.</p></div>
+      <div class="card"><div class="ico">⚡</div><h3>2. Stream as it downloads</h3><p>Pieces are fetched in playback order and served over HTTP range requests. Browsers-native codecs stream-copy; MKV, HEVC, DivX and WMV are converted to H.264/AAC on the fly.</p></div>
+      <div class="card"><div class="ico">🧩</div><h3>3. Watch anywhere — even Stremio</h3><p>The same library is exposed as a Stremio addon: a catalog of everything on the server, with per-episode streams. Install it once with the manifest URL.</p></div>
     </div>
   </section>
 
   <section class="faq" id="faq">
     <h2>FAQ</h2>
-    <details><summary>Why is my torrent stuck on “Connecting…”?</summary><p>Browsers can only talk to peers that support <b>WebRTC</b> (WebTorrent peers). Classic-only torrents (plain BitTorrent clients over TCP/UDP) usually have no browser-reachable peers. Torrents that are also seeded by WebTorrent clients — like the samples above — work great. For best results, use a torrent with a <code>wss://</code> tracker.</p></details>
-    <details><summary>Which formats can I play?</summary><p>With the Server engine, essentially all of them: MP4, WebM, MKV, AVI, WMV, FLV, MOV, MPEG/TS — and audio like MP3, FLAC, OGG, WAV, AAC and Opus. If your browser can't decode a file natively (HEVC/H.265, DivX, AC3/DTS audio…) it is converted to H.264/AAC on the fly. Audio-only files with embedded cover art are handled too. The Browser P2P engine is limited to whatever your browser plays natively: MP4 (H.264/AAC), WebM, MP3, OGG, FLAC, WAV, images, and text subtitles (.srt / .vtt are auto-detected). MKV and HEVC depend on your browser.</p></details>
-    <details><summary>Can I seek while watching?</summary><p>Yes for files your browser plays natively — they're served with HTTP range requests. Converted streams can't seek while converting (inherent to progressive fragmented MP4).</p></details>
+    <details><summary>How does the Stremio addon work?</summary><p>Streamtor implements the Stremio addon protocol: a <code>manifest.json</code> plus <code>catalog</code>, <code>meta</code> and <code>stream</code> endpoints under <code>/stremio/&lt;code&gt;/</code>. The catalog lists the torrents currently on the server (movies and episode packs as series); opening one lists every playable file as a stream that Stremio plays from your server's URL. Add a torrent on the website and it appears in Stremio's Discover board.</p></details>
+    <details><summary>Who can use the addon?</summary><p>The addon URL contains your server's access code, so on a server with <code>ACCESS_CODE</code> set, only people who know the code can install the addon or fetch its streams. With no access code configured, any value works (e.g. <code>/stremio/public/manifest.json</code>) and the server is open — set an <code>ACCESS_CODE</code> on public hosts.</p></details>
+    <details><summary>Why is my torrent stuck on “Connecting…”?</summary><p>On the Server engine, no peers means the torrent has no seeders. In the Browser P2P engine, browsers can only talk to WebRTC (WebTorrent) peers — classic BitTorrent clients are unreachable from a web page. The Server engine works with any torrent that has seeders.</p></details>
+    <details><summary>Which formats can I play?</summary><p>With the Server engine, essentially all of them: MP4, WebM, MKV, AVI, WMV, FLV, MOV, MPEG/TS — and audio like MP3, FLAC, OGG, WAV, AAC and Opus. If your browser can't decode a file natively (HEVC/H.265, DivX, AC3/DTS audio…) it is converted to H.264/AAC on the fly. The Browser P2P engine is limited to whatever your browser plays natively.</p></details>
+    <details><summary>Can I seek while watching?</summary><p>Yes for files your browser plays natively — they're served with HTTP range requests (in Stremio too). Converted streams can't seek while converting (inherent to progressive fragmented MP4).</p></details>
     <details><summary>Is it legal?</summary><p>This tool is just a client, like any torrent app. Only stream content you have the right to access — public-domain, Creative Commons, or your own files.</p></details>
-    <details><summary>Do you store my files?</summary><p>No. Data lives in your browser's memory while the tab is open, and is discarded when you close it.</p></details>
+    <details><summary>Do you store my files?</summary><p>Server-side data lives in a temp directory and is deleted when the torrent goes idle (default 20 minutes) or the server restarts. Nothing is retained between sessions.</p></details>
   </section>
 </main>
 
-<footer>Built with <a href="https://webtorrent.io" target="_blank" rel="noopener">WebTorrent</a> · Inspired by webtor.io · Only stream content you have the right to use.</footer>
+<footer>Built with <a href="https://webtorrent.io" target="_blank" rel="noopener">WebTorrent</a> · Inspired by webtor.io · Speaks the <a href="https://github.com/Stremio/stremio-addon-sdk" target="_blank" rel="noopener">Stremio addon protocol</a> · Only stream content you have the right to use.</footer>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>
