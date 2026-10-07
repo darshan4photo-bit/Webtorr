@@ -104,6 +104,7 @@ async function start(source, label) {
     else if (!/^(magnet:|https?:\/\/)/i.test(s)) return showError('That doesn’t look like a magnet link, info-hash or .torrent URL.');
   }
   await resetView();
+  setNav('home');
   $('hero').hidden = true; $('view').hidden = false;
   $('tName').textContent = label || 'Fetching metadata…';
   $('files').innerHTML = ''; window.scrollTo({ top: 0 });
@@ -113,7 +114,7 @@ async function start(source, label) {
 }
 
 function backHome(msg) {
-  resetView(); $('view').hidden = true; $('hero').hidden = false;
+  resetView(); setNav('home'); $('view').hidden = true; $('hero').hidden = false;
   if (msg) showError(msg);
   history.replaceState(null, '', location.pathname);
 }
@@ -354,6 +355,7 @@ document.querySelectorAll('[data-sample]').forEach((card) => {
   card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
 });
 $('navSearch').addEventListener('click', () => {
+  setNav('home');
   if (!$('view').hidden) backHome();
   $('hero').scrollIntoView({ behavior: 'smooth', block: 'center' });
   $('magnetInput').focus();
@@ -381,3 +383,45 @@ $('copyLink').addEventListener('click', async (e) => {
 });
 const hash = decodeURIComponent(location.hash.slice(1));
 if (hash) { $('magnetInput').value = hash; ready.then(() => { if (!backend?.auth || backend.authed) start(hash); }); }
+
+/* ---------- Stremio-style sidebar navigation ---------- */
+function setNav(name) {
+  document.querySelectorAll('[data-nav]').forEach((b) => b.classList.toggle('on', b.dataset.nav === name));
+  const home = name === 'home';
+  $('hero').hidden = !home;
+  $('addonsView').hidden = name !== 'addons';
+  if (cur) $('view').hidden = !home;
+  if (name === 'addons') renderAddon();
+}
+document.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => setNav(b.dataset.nav)));
+
+/* ---------- Stremio addon panel ---------- */
+function renderAddon() {
+  const withEngine = !!backend?.server;
+  $('addonNeedsServer').hidden = withEngine;
+  $('addonMain').hidden = !withEngine;
+  if (!withEngine) return;
+  $('addonCodeRow').hidden = !backend.auth;
+  const code = backend.auth ? ($('addonCode').value.trim() || 'YOUR-ACCESS-CODE') : 'public';
+  const b = `${location.origin}/stremio/${encodeURIComponent(code)}`;
+  const manifestUrl = b + '/manifest.json';
+  $('addonUrl').textContent = manifestUrl;
+  $('addonInstall').href = 'stremio://' + b.replace(/^https?:\/\//, '') + '/manifest.json';
+  $('addonState').textContent = 'Checking…';
+  $('addonState').className = 'addonstate';
+  fetch(manifestUrl)
+    .then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.name) { $('addonState').textContent = `✓ Reachable — “${j.name}” v${j.version}`; $('addonState').classList.add('ok'); }
+      else if (r.status === 401) { $('addonState').textContent = '✗ Server rejected that access code.'; $('addonState').classList.add('bad'); }
+      else { $('addonState').textContent = '✗ Unexpected response from the manifest URL.'; $('addonState').classList.add('bad'); }
+    })
+    .catch(() => { $('addonState').textContent = '✗ Could not fetch the manifest from here.'; $('addonState').classList.add('bad'); });
+}
+$('addonCode').addEventListener('input', () => { if (!$('addonsView').hidden) renderAddon(); });
+$('addonCopy').addEventListener('click', async (e) => {
+  const t = $('addonUrl').textContent;
+  try { await navigator.clipboard.writeText(t); e.target.textContent = '✓ Copied'; }
+  catch { prompt('Copy the manifest URL:', t); }
+  setTimeout(() => (e.target.textContent = '⧉ Copy'), 1500);
+});

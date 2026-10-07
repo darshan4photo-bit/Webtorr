@@ -458,16 +458,191 @@ async function handleApi(req, res, url) {
   return json(res, 404, { error: 'Not found' });
 }
 
+async function streamByHashIdx(req, res, url, hash, idx) {
+  const t = await find(String(hash).toLowerCase());
+  const file = t?.files?.[Number(idx)];
+  if (!file) return json(res, 404, { error: 'Torrent or file not found (it may have expired).' });
+  touch(t); file.select();
+  await streamFile(req, res, file, url, t.infoHash, Number(idx));
+}
+
 async function handleStream(req, res, url) {
   if (!CFG.engine) return json(res, 404, { error: 'Server engine disabled' });
   if (!authed(req) && url.searchParams.get('ik') !== INTERNAL_KEY) return json(res, 401, { error: 'Access code required.' });
   const m = /^\/stream\/([a-f0-9]{40})\/(\d+)$/i.exec(url.pathname);
   if (!m) return json(res, 404, { error: 'Not found' });
-  const t = await find(m[1].toLowerCase());
-  const file = t?.files?.[Number(m[2])];
-  if (!file) return json(res, 404, { error: 'Torrent or file not found (it may have expired).' });
-  touch(t); file.select();
-  await streamFile(req, res, file, url, t.infoHash, Number(m[2]));
+  return streamByHashIdx(req, res, url, m[1], m[2]);
+}
+
+/* ---------------- Stremio addon ---------------- */
+// Streamtor doubles as a self-hosted Stremio addon. Everything under /stremio/<code>/ speaks the
+// addon protocol: manifest.json + catalog/meta/stream resources. <code> is the server's
+// ACCESS_CODE on protected servers (so only people who know it can install the addon), or an
+// arbitrary label like "public" when no access code is configured. The catalog lists the
+// torrents currently on the server, so anything added on the website shows up inside Stremio.
+const STREMIO_PREFIX = 'streamtor';
+const STREMIO_VIDEO = new Set(['mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi', 'ts', 'm2ts', 'wmv', 'flv', 'ogv', 'mpg', 'mpeg', 'm2v', 'divx', '3gp']);
+const STREMIO_AUDIO = new Set(['mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'wav', 'flac', 'wma']);
+const EP_RE = /(?:^|[\s._\-\[])S(\d{1,2})E(\d{1,2})(?:[\s._\-\]]|$)|(?:^|[\s._\-\[])(\d{1,2})x(\d{2})(?:[\s._\-\]]|$)/i;
+const extOf = (n) => path.extname(n || '').toLowerCase().slice(1);
+const stremioBytes = (n) => { if (!n) return '0 B'; const u = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), 4); return (n / 1024 ** i).toFixed(i ? 1 : 0) + ' ' + u[i]; };
+
+// A torrent counts as a series when most of its video files carry SxxEyy / 1x01 episode tags.
+const isSeriesTorrent = (t) => {
+  const vids = (t?.files || []).filter((f) => STREMIO_VIDEO.has(extOf(f.name)));
+  return vids.length >= 2 && vids.filter((f) => EP_RE.test(f.name)).length >= Math.ceil(vids.length * 0.6);
+};
+const stremioPlayable = (t) => (t?.files || []).map((f, index) => ({ f, index }))
+  .filter(({ f }) => STREMIO_VIDEO.has(extOf(f.name)) || STREMIO_AUDIO.has(extOf(f.name)));
+const stremioBase = (origin, code) => `${origin.replace(/\/+$/, '')}/stremio/${encodeURIComponent(code)}`;
+const stremioIdHash = (id) => new RegExp(`^${STREMIO_PREFIX}:([a-f0-9]{40})(?::f(\\d+))?$`, 'i').exec(String(id || ''));
+
+function stremioManifest(origin, code) {
+  const root = origin.replace(/\/+$/, '');
+  return {
+    id: 'community.streamtor',
+    version: '1.1.0',
+    name: 'Streamtor',
+    description: 'Your own torrent server inside Stremio. Browse everything added on your Streamtor server and stream it with on-the-fly conversion for MKV, HEVC and friends.',
+    logo: `${root}/favicon.svg`,
+    resources: ['catalog', 'meta', 'stream'],
+    types: ['movie', 'series'],
+    idPrefixes: [STREMIO_PREFIX],
+    catalogs: [
+      { type: 'movie', id: 'library', name: 'Streamtor Library', extra: [{ name: 'search', isRequired: false }] },
+      { type: 'series', id: 'library', name: 'Streamtor Library', extra: [{ name: 'search', isRequired: false }] }
+    ],
+    behaviorHints: { adult: false, p2p: false, configurable: false }
+  };
+}
+
+function stremioCatalog(base, list, q = '') {
+  const needle = String(q).trim().toLowerCase();
+  return {
+    metas: list
+      .filter((t) => !needle || (t.name || '').toLowerCase().includes(needle))
+      .map((t) => {
+        const n = (t.files || []).length;
+        return {
+          id: `${STREMIO_PREFIX}:${t.infoHash}`,
+          type: isSeriesTorrent(t) ? 'series' : 'movie',
+          name: t.name || t.infoHash,
+          poster: `${base}/poster/${t.infoHash}.svg`,
+          posterShape: 'regular',
+          description: `${n} file${n === 1 ? '' : 's'} · ${stremioBytes(t.length || 0)}${t.ready ? '' : ' · fetching metadata'}`
+        };
+      })
+  };
+}
+
+function stremioMeta(t, base) {
+  if (!t) return { meta: {} };
+  const series = isSeriesTorrent(t);
+  const meta = {
+    id: `${STREMIO_PREFIX}:${t.infoHash}`,
+    type: series ? 'series' : 'movie',
+    name: t.name || t.infoHash,
+    poster: `${base}/poster/${t.infoHash}.svg`,
+    posterShape: 'regular',
+    description: `${(t.files || []).length} files · ${stremioBytes(t.length || 0)} · streamed by your Streamtor server`
+  };
+  if (series) {
+    // Episode pack: build one video entry per playable video file. Files with SxxEyy keep their
+    // numbers; the rest get sequential fallback numbers so Stremio still lists them as episodes.
+    const vids = stremioPlayable(t).filter(({ f }) => STREMIO_VIDEO.has(extOf(f.name)));
+    const parsed = vids.map(({ f, index }) => {
+      const m = EP_RE.exec(f.name);
+      return { f, index, s: m ? Number(m[1] || m[3]) : 1, e: m ? Number(m[2] || m[4]) : 0, named: !!m };
+    }).sort((a, b) => a.s - b.s || (a.e || 9e9) - (b.e || 9e9) || a.f.name.localeCompare(b.f.name));
+    let seq = 0;
+    meta.videos = parsed.map((v) => ({
+      id: `${STREMIO_PREFIX}:${t.infoHash}:f${v.index}`,
+      season: v.s,
+      episode: v.named ? v.e : ++seq,
+      name: v.f.name,
+      description: stremioBytes(v.f.length || 0)
+    }));
+  }
+  return { meta };
+}
+
+function stremioStreams(t, base, type, id) {
+  if (!t) return { streams: [] };
+  const m = stremioIdHash(id);
+  if (!m || m[1].toLowerCase() !== String(t.infoHash).toLowerCase()) return { streams: [] };
+  let files = stremioPlayable(t);
+  if (m[2] !== undefined) files = files.filter((x) => x.index === Number(m[2]));
+  else files.sort((a, b) => (STREMIO_VIDEO.has(extOf(b.f.name)) - STREMIO_VIDEO.has(extOf(a.f.name))) || b.f.length - a.f.length);
+  return {
+    streams: files.map(({ f, index }) => ({
+      name: 'Streamtor',
+      title: f.name,
+      description: stremioBytes(f.length || 0),
+      url: `${base}/dl/${t.infoHash}/${index}`,
+      behaviorHints: { notWebReady: false, bingeGroup: `streamtor-${t.infoHash}` }
+    }))
+  };
+}
+
+const xmlEsc = (s) => String(s).replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+
+// Deterministic gradient poster with the torrent's initials — real artwork is not available.
+function stremioPoster(name, hash) {
+  const words = String(name || '').replace(/[._]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const initials = ((words[0]?.[0] || 'S') + (words[1]?.[0] || words[0]?.[1] || 'T')).toUpperCase();
+  const h = parseInt(String(hash || '').slice(0, 4), 16) || 0;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">`
+    + `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">`
+    + `<stop offset="0" stop-color="hsl(${h % 360} 62% 42%)"/><stop offset="1" stop-color="hsl(${(h + 55) % 360} 68% 28%)"/>`
+    + `</linearGradient></defs><rect width="300" height="450" fill="url(#g)"/>`
+    + `<text x="150" y="222" font-family="Arial,Helvetica,sans-serif" font-size="104" font-weight="700" fill="rgba(255,255,255,.92)" text-anchor="middle">${xmlEsc(initials)}</text>`
+    + `<text x="150" y="268" font-family="Arial,Helvetica,sans-serif" font-size="17" fill="rgba(255,255,255,.78)" text-anchor="middle">${xmlEsc(String(name || 'Streamtor').slice(0, 30))}</text></svg>`;
+}
+
+async function handleStremio(req, res, url) {
+  const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS' };
+  if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end(); }
+  if (!CFG.engine) return json(res, 404, { error: 'Server engine disabled' }, CORS);
+  const m = /^\/stremio\/([^/]+)(\/.*)?$/i.exec(url.pathname);
+  if (!m) return json(res, 404, { error: 'Not found' }, CORS);
+  let code = m[1];
+  try { code = decodeURIComponent(code); } catch { return json(res, 404, { error: 'Bad addon code' }, CORS); }
+  if (CFG.accessCode) {
+    const ok = crypto.timingSafeEqual(crypto.createHash('sha256').update(code).digest(), crypto.createHash('sha256').update(CFG.accessCode).digest());
+    if (!ok) return json(res, 401, { error: 'Invalid addon access code. Use your server ACCESS_CODE in the addon URL.' }, CORS);
+  }
+  const proto = req.headers['x-forwarded-proto']?.split(',')[0] === 'https' ? 'https' : 'http';
+  const origin = `${proto}://${req.headers.host || 'localhost'}`;
+  const base = stremioBase(origin, code);
+  const rest = m[2] || '';
+  let mm;
+  if (rest === '/manifest.json') return json(res, 200, stremioManifest(origin, code), CORS);
+  if ((mm = /^\/catalog\/(movie|series)\/(.+)\.json$/i.exec(rest))) {
+    const q = /(?:^|\/|&)search=([^&]*)/.exec(mm[2])?.[1] || '';
+    let qs = q; try { qs = decodeURIComponent(q); } catch { /* keep raw */ }
+    const wantSeries = mm[1].toLowerCase() === 'series';
+    const list = (client?.torrents || []).filter((t) => isSeriesTorrent(t) === wantSeries);
+    return json(res, 200, stremioCatalog(base, list, qs), CORS);
+  }
+  if ((mm = /^\/meta\/(movie|series)\/(.+)\.json$/i.exec(rest))) {
+    const h = stremioIdHash(mm[2]);
+    const t = h ? await find(h[1].toLowerCase()) : null;
+    if (t) touch(t);
+    return json(res, 200, stremioMeta(t, base), CORS);
+  }
+  if ((mm = /^\/stream\/(movie|series)\/(.+)\.json$/i.exec(rest))) {
+    const h = stremioIdHash(mm[2]);
+    const t = h ? await find(h[1].toLowerCase()) : null;
+    if (t) touch(t);
+    return json(res, 200, stremioStreams(t, base, mm[1].toLowerCase(), mm[2]), CORS);
+  }
+  if ((mm = /^\/poster\/([a-f0-9]{40})\.svg$/i.exec(rest))) {
+    const t = await find(mm[1].toLowerCase());
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store', ...CORS });
+    return res.end(stremioPoster(t?.name, mm[1]));
+  }
+  if ((mm = /^\/dl\/([a-f0-9]{40})\/(\d+)$/i.exec(rest))) return streamByHashIdx(req, res, url, mm[1], mm[2]);
+  return json(res, 404, { error: 'Not found' }, CORS);
 }
 
 function serveStatic(req, res, url) {
@@ -489,10 +664,14 @@ function serveStatic(req, res, url) {
 
 // Only bind the HTTP port when run directly (`node server.js`), so tests can import the helpers.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // Crash guards only for a real server process — loaded by tests as a library, they would mask failures there.
+  process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e?.message || e));
+  process.on('uncaughtException', (e) => console.error('[uncaughtException]', e?.message || e));
   http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
       if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+      if (url.pathname.startsWith('/stremio/')) return await handleStremio(req, res, url);
       if (url.pathname.startsWith('/stream/')) return await handleStream(req, res, url);
       serveStatic(req, res, url);
     } catch (e) {
@@ -502,7 +681,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }).listen(CFG.port, '0.0.0.0', () => console.log(`Streamtor on :${CFG.port} | engine=${CFG.engine} | ffmpeg=${!!ffmpegPath} | access code ${CFG.accessCode ? 'ON' : 'OFF'}`));
 }
 
-process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e?.message || e));
-process.on('uncaughtException', (e) => console.error('[uncaughtException]', e?.message || e));
-
-export { probeCodecs, buildConvertArgs, computeMoviehash, subToVtt, getSubtitleVtt, CFG };
+export { probeCodecs, buildConvertArgs, computeMoviehash, subToVtt, getSubtitleVtt, CFG,
+  stremioManifest, stremioCatalog, stremioMeta, stremioStreams, stremioPoster, isSeriesTorrent };

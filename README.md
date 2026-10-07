@@ -1,4 +1,8 @@
-# Streamtor — Webtor-style torrent streaming
+# Streamtor — torrent streaming website + Stremio addon
+
+Stream a magnet link in the browser, and install the **built-in Stremio addon** so the same server appears as a catalog inside Stremio.
+
+## The site
 
 Two engines in one site:
 
@@ -8,6 +12,25 @@ Two engines in one site:
 | **Browser P2P** | WebTorrent in the tab over WebRTC | Only torrents with WebRTC peers. Works on static hosts (InfinityFree, Netlify…) |
 
 If the page is served by `server.js`, both engines appear (Server is the default). On a static host only Browser P2P is available.
+
+## Stremio addon (built in)
+
+Streamtor doubles as a **self-hosted Stremio addon** — no extra install, no package:
+
+| Route | Purpose |
+|---|---|
+| `GET /stremio/<code>/manifest.json` | Addon manifest (`catalog`, `meta`, `stream` resources) |
+| `GET /stremio/<code>/catalog/{movie\|series}/{id}.json` (+ optional `/search=…`) | Live catalog of the torrents on the server |
+| `GET /stremio/<code>/meta/{movie\|series}/{id}.json` | Item detail; episode packs list every video file as an episode |
+| `GET /stremio/<code>/stream/{movie\|series}/{id}.json` | Playable streams (URLs under `.../dl/<hash>/<fileIndex>`) |
+| `GET /stremio/<code>/poster/<hash>.svg` | Generated poster art |
+| `GET /stremio/<code>/dl/<hash>/<fileIndex>` | Range-capable stream endpoint Stremio plays from |
+
+- IDs are `streamtor:<infoHash>` (movies) and `streamtor:<infoHash>:f<fileIndex>` (single episodes).
+- A torrent counts as a **series** when most of its video files carry `SxxEyy`/`1x01` episode tags; files without tags get sequential episode numbers.
+- All routes send permissive CORS headers, as the Stremio protocol requires.
+- `<code>` is your `ACCESS_CODE` on protected servers (so only people who know it can install the addon); on open servers any label such as `public` works.
+- Install: on the site, open **Stremio Addon** in the sidebar, copy the manifest URL (or press **Install in Stremio**) and add it via **Stremio → Addons → Community Addons**. Streams then play straight from your server, including the ffmpeg-based conversion.
 
 ## Run locally (Node 22+)
     npm install

@@ -4,7 +4,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node tests/convert.test.mjs && node tests/subtitles.test.mjs"
+    "test": "node tests/convert.test.mjs && node tests/subtitles.test.mjs && node tests/stremio.test.mjs"
   },
   "keywords": [],
   "author": "",
